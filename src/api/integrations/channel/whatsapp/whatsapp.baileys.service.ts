@@ -5,6 +5,7 @@ import {
   BlockUserDto,
   DeleteMessage,
   getBase64FromMediaMessageDto,
+  Key,
   LastMessage,
   MarkChatUnreadDto,
   NumberBusiness,
@@ -14,6 +15,7 @@ import {
   SendPresenceDto,
   UpdateMessageDto,
   WhatsAppNumberDto,
+  type ReadChatDto,
 } from '@api/dto/chat.dto';
 import {
   AcceptGroupInvite,
@@ -3335,9 +3337,72 @@ export class BaileysStartupService extends ChannelStartupService {
         }
       });
       await this.client.readMessages(keys);
+
+      const messages = await this.prismaRepository.message.findMany({
+        where: {
+          instanceId: this.instanceId,
+          OR: keys.map((k) => ({
+            AND: [
+              { key: { path: ['remoteJid'], equals: k.remoteJid } },
+              { key: { path: ['fromMe'], equals: k.fromMe } },
+              { key: { path: ['id'], equals: k.id } },
+              { status: { notIn: ['READ', 'PLAYED'] } },
+            ],
+          })),
+        },
+      });
+      const messageIds = messages.map((msg) => msg.id).filter((id) => !!id);
+      // Fixes issue where all messages are marked as read when messageIds is empty
+      if (messageIds.length)
+        await this.prismaRepository.message.updateMany({
+          where: {
+            id: { in: messageIds },
+          },
+          data: { status: 'READ' },
+        });
+
       return { message: 'Read messages', read: 'success' };
     } catch (error) {
       throw new InternalServerErrorException('Read messages fail', error.toString());
+    }
+  }
+
+  public async markChatAsRead(data: ReadChatDto) {
+    try {
+      const messages = await this.prismaRepository.message.findMany({
+        where: {
+          instanceId: this.instanceId,
+
+          AND: [{ key: { path: ['remoteJid'], equals: data.remoteJid } }, { key: { path: ['fromMe'], equals: false } }],
+          status: { notIn: ['READ', 'PLAYED'] },
+        },
+        orderBy: { messageTimestamp: 'asc' },
+      });
+      const messagesKeys = messages.map((msg) => {
+        const key = msg.key as proto.IMessageKey;
+        return { fromMe: key.fromMe, id: key.id, remoteJid: key.remoteJid };
+      });
+
+      this.markMessageAsRead({
+        readMessages: messagesKeys,
+      });
+
+      const findChat = await this.prismaRepository.chat.findFirst({
+        where: { remoteJid: data.remoteJid, instanceId: this.instanceId },
+      });
+
+      if (findChat)
+        await this.prismaRepository.chat.update({
+          where: { id: findChat.id },
+          data: { unreadMessages: 0 },
+        });
+
+      return { chatId: messagesKeys, markedChatAsRead: true, messages };
+    } catch (error) {
+      throw new InternalServerErrorException({
+        markedChatAsRead: false,
+        message: ['An error occurred while marking as read the chat. Open a calling.', error.toString()],
+      });
     }
   }
 
@@ -4667,9 +4732,12 @@ export class BaileysStartupService extends ChannelStartupService {
         instanceId: true,
         source: true,
         contextInfo: true,
+        status: true,
         MessageUpdate: { select: { status: true } },
       },
     });
+
+    console.log(messages.find((item) => item.id == 'cmesvx98l09foo16g755sze2g'));
 
     const formattedMessages = messages.map((message) => {
       const messageKey = message.key as { fromMe: boolean; remoteJid: string; id: string; participant?: string };

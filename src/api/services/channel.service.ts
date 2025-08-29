@@ -780,40 +780,62 @@ export class ChannelStartupService {
     `;
 
     if (results && isArray(results) && results.length > 0) {
-      const mappedResults = results.map((contact) => {
-        const lastMessage = contact.lastMessageId
-          ? {
-              id: contact.lastMessageId,
-              key: contact.lastMessage_key,
-              pushName: contact.lastMessagePushName,
-              participant: contact.lastMessageParticipant,
-              messageType: contact.lastMessageMessageType,
-              message: contact.lastMessageMessage,
-              contextInfo: contact.lastMessageContextInfo,
-              source: contact.lastMessageSource,
-              messageTimestamp: contact.lastMessageMessageTimestamp,
-              instanceId: contact.lastMessageInstanceId,
-              sessionId: contact.lastMessageSessionId,
-              status: contact.lastMessageStatus,
-            }
-          : undefined;
+      const lastMessageIds = results.map(r => r.lastMessageId).filter(Boolean);
 
-        return {
-          id: contact.contactId || null,
-          remoteJid: contact.remoteJid,
-          pushName: contact.pushName,
-          profilePicUrl: contact.profilePicUrl,
-          updatedAt: contact.updatedAt,
-          windowStart: contact.windowStart,
-          windowExpires: contact.windowExpires,
-          windowActive: contact.windowActive,
-          lastMessage: lastMessage ? this.cleanMessageData(lastMessage) : undefined,
-          unreadCount: contact.unreadMessages,
-          isSaved: !!contact.contactId,
-        };
-      });
+const updates = await this.prismaRepository.messageUpdate.findMany({
+  where: { messageId: { in: lastMessageIds } },
+  select: {
+    messageId: true,
+    status: true,
+  },
+});
 
-      return mappedResults;
+const updatesByMessage = updates.reduce((acc, upd) => {
+  if (!acc[upd.messageId]) acc[upd.messageId] = [];
+  acc[upd.messageId].push({
+    status: upd.status,
+  });
+  return acc;
+}, {} as Record<string, {status: string}[]>);
+
+console.log(updatesByMessage);
+
+const mappedResults = results.map((contact) => {
+  const lastMessage = contact.lastMessageId
+    ? {
+        id: contact.lastMessageId,
+        key: contact.lastMessage_key,
+        pushName: contact.lastMessagePushName,
+        participant: contact.lastMessageParticipant,
+        messageType: contact.lastMessageMessageType,
+        message: contact.lastMessageMessage,
+        contextInfo: contact.lastMessageContextInfo,
+        source: contact.lastMessageSource,
+        messageTimestamp: contact.lastMessageMessageTimestamp,
+        instanceId: contact.lastMessageInstanceId,
+        sessionId: contact.lastMessageSessionId,
+        status: contact.lastMessageStatus,
+        MessageUpdate: updatesByMessage[contact.lastMessageId] || [],
+      }
+    : undefined;
+
+  return {
+    id: contact.contactId || null,
+    remoteJid: contact.remoteJid,
+    pushName: contact.pushName,
+    profilePicUrl: contact.profilePicUrl,
+    updatedAt: contact.updatedAt,
+    windowStart: contact.windowStart,
+    windowExpires: contact.windowExpires,
+    windowActive: contact.windowActive,
+    lastMessage: lastMessage ? this.cleanMessageData(lastMessage) : undefined,
+    unreadCount: contact.unreadMessages,
+    isSaved: !!contact.contactId,
+  };
+});
+
+    
+return mappedResults;
     }
 
     return [];

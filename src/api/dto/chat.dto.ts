@@ -61,13 +61,16 @@ export class ProfilePictureDto {
   picture?: string;
 }
 
-class Key {
+export class Key {
   id: string;
   fromMe: boolean;
   remoteJid: string;
 }
 export class ReadMessageDto {
   readMessages: Key[];
+}
+export class ReadChatDto {
+  remoteJid: string;
 }
 
 export class LastMessage {

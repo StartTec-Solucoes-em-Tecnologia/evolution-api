@@ -10,6 +10,7 @@ import {
   ProfileNameDto,
   ProfilePictureDto,
   ProfileStatusDto,
+  ReadChatDto,
   ReadMessageDto,
   SendPresenceDto,
   UpdateMessageDto,
@@ -33,6 +34,7 @@ import {
   profilePictureSchema,
   profileSchema,
   profileStatusSchema,
+  readChatSchema,
   readMessageSchema,
   updateMessageSchema,
   whatsappNumberSchema,
@@ -66,6 +68,16 @@ export class ChatRouter extends RouterBroker {
           schema: readMessageSchema,
           ClassRef: ReadMessageDto,
           execute: (instance, data) => chatController.readMessage(instance, data),
+        });
+
+        return res.status(HttpStatus.CREATED).json(response);
+      })
+        .post(this.routerPath('markChatAsRead'), ...guards, async (req, res) => {
+        const response = await this.dataValidate<ReadChatDto>({
+          request: req,
+          schema: readChatSchema,
+          ClassRef: ReadChatDto,
+          execute: (instance, data) => chatController.readChat(instance, data),
         });
 
         return res.status(HttpStatus.CREATED).json(response);

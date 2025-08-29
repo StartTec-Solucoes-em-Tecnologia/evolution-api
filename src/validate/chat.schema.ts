@@ -62,6 +62,16 @@ export const readMessageSchema: JSONSchema7 = {
   },
   required: ['readMessages'],
 };
+export const readChatSchema: JSONSchema7 = {
+  $id: v4(),
+  type: 'object',
+  properties: {
+    remoteJid: {
+      type: 'string',
+    },
+  },
+  required: ['remoteJid'],
+};
 
 export const archiveChatSchema: JSONSchema7 = {
   $id: v4(),

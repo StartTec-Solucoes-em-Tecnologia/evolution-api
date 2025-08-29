@@ -1634,6 +1634,9 @@ export class BusinessStartupService extends ChannelStartupService {
   public async markMessageAsRead() {
     throw new BadRequestException('Method not available on WhatsApp Business API');
   }
+  public async markChatAsRead() {
+    throw new BadRequestException('Method not available on WhatsApp Business API');
+  }
   public async archiveChat() {
     throw new BadRequestException('Method not available on WhatsApp Business API');
   }
