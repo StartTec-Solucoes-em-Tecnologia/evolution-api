@@ -1180,7 +1180,6 @@ export class BaileysStartupService extends ChannelStartupService {
           }
 
           const messageRaw = this.prepareMessage(received);
-
           const isMedia =
             received?.message?.imageMessage ||
             received?.message?.videoMessage ||
@@ -1336,7 +1335,7 @@ export class BaileysStartupService extends ChannelStartupService {
 
           this.logger.log(messageRaw);
 
-          this.sendDataWebhook(Events.MESSAGES_UPSERT, messageRaw);
+          this.sendDataWebhook(Events.MESSAGES_UPSERT, {...messageRaw,type});
 
           await chatbotController.emit({
             instance: { instanceName: this.instance.name, instanceId: this.instanceId },
