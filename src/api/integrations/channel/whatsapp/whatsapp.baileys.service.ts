@@ -4786,8 +4786,6 @@ export class BaileysStartupService extends ChannelStartupService {
       },
     });
 
-    console.log(messages.find((item) => item.id == 'cmesvx98l09foo16g755sze2g'));
-
     const formattedMessages = messages.map((message) => {
       const messageKey = message.key as { fromMe: boolean; remoteJid: string; id: string; participant?: string };
 
