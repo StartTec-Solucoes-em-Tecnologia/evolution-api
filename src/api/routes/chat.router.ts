@@ -3,6 +3,7 @@ import {
   ArchiveChatDto,
   BlockUserDto,
   DeleteMessage,
+  DeleteMultipleMessages,
   getBase64FromMediaMessageDto,
   MarkChatUnreadDto,
   NumberDto,
@@ -25,6 +26,7 @@ import {
   blockUserSchema,
   contactValidateSchema,
   deleteMessageSchema,
+  deleteMultipleMessagesSchema,
   markChatUnreadSchema,
   messageUpSchema,
   messageValidateSchema,
@@ -111,6 +113,16 @@ export class ChatRouter extends RouterBroker {
         });
 
         return res.status(HttpStatus.CREATED).json(response);
+      })
+      .post(this.routerPath('deleteMultipleMessages'), ...guards, async (req, res) => {
+        const response = await this.dataValidate<DeleteMultipleMessages>({
+          request: req,
+          schema: deleteMultipleMessagesSchema,
+          ClassRef: DeleteMultipleMessages,
+          execute: (instance, data) => chatController.deleteMultipleMessages(instance, data),
+        });
+
+        return res.status(HttpStatus.OK).json(response);
       })
       .post(this.routerPath('fetchProfilePictureUrl'), ...guards, async (req, res) => {
         const response = await this.dataValidate<NumberDto>({

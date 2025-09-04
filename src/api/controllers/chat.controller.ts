@@ -46,6 +46,10 @@ export class ChatController {
     return await this.waMonitor.waInstances[instanceName].deleteMessage(data);
   }
 
+  public async deleteMultipleMessages({ instanceName }: InstanceDto, data: { messages: DeleteMessage[] }) {
+    return await this.waMonitor.waInstances[instanceName].deleteMultipleMessages(data);
+  }
+
   public async fetchProfilePicture({ instanceName }: InstanceDto, data: NumberDto) {
     return await this.waMonitor.waInstances[instanceName].profilePicture(data.number);
   }

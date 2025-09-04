@@ -141,6 +141,31 @@ export const deleteMessageSchema: JSONSchema7 = {
   ...isNotEmpty('id', 'remoteJid', 'participant'),
 };
 
+export const deleteMultipleMessagesSchema: JSONSchema7 = {
+  $id: v4(),
+  type: 'object',
+  properties: {
+    messages: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 100, // Limite de 100 mensagens por vez
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          fromMe: { type: 'boolean', enum: [true, false] },
+          remoteJid: { type: 'string' },
+          participant: { type: 'string' },
+        },
+        required: ['id', 'fromMe', 'remoteJid'],
+        ...isNotEmpty('id', 'remoteJid', 'participant'),
+      },
+    },
+  },
+  required: ['messages'],
+  ...isNotEmpty('messages'),
+};
+
 export const profilePictureSchema: JSONSchema7 = {
   $id: v4(),
   type: 'object',

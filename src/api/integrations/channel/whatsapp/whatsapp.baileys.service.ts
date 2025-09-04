@@ -1093,7 +1093,59 @@ export class BaileysStartupService extends ChannelStartupService {
           const editedMessage =
             received?.message?.protocolMessage || received?.message?.editedMessage?.message?.protocolMessage;
 
-          if (editedMessage) {
+          // Verificar se é realmente uma edição e não uma deleção
+          // Mensagens deletadas vêm com message: null
+          const isMessageDelete = received?.message === null || (editedMessage && (
+            editedMessage.type === 0 || // REVOKE type
+            !editedMessage.editedMessage // Sem conteúdo editado = deleção
+          ));
+          
+          const isActualEdit = editedMessage && !isMessageDelete && (
+            editedMessage.editedMessage || // Tem conteúdo editado
+            (editedMessage.type === 14) || // MESSAGE_EDIT type
+            received?.message?.editedMessage // Estrutura de mensagem editada
+          );
+
+          // Debug log para entender o tipo de protocolMessage
+          if (editedMessage || received?.message === null) {
+            this.logger.log(`ProtocolMessage detected - Type: ${editedMessage?.type}, HasEditedMessage: ${!!editedMessage?.editedMessage}, MessageIsNull: ${received?.message === null}, IsEdit: ${isActualEdit}, IsDelete: ${isMessageDelete}`);
+          }
+
+          // Processar deleção via protocolMessage (quando não é tratado em messages.update)
+          if (isMessageDelete && (editedMessage || received?.message === null)) {
+            const deleteKey = editedMessage?.key || received?.key;
+            
+            if (deleteKey) {
+              this.sendDataWebhook(Events.MESSAGES_DELETE, deleteKey);
+              
+              const oldMessage = await this.getMessage(deleteKey, true);
+              if ((oldMessage as any)?.id) {
+                const existingKey = typeof (oldMessage as any)?.key === 'object' && (oldMessage as any).key !== null ? (oldMessage as any).key : {};
+                await this.prismaRepository.message.update({
+                  where: { id: (oldMessage as any).id },
+                  data: { 
+                    key: { ...existingKey, deleted: true }, 
+                    status: 'DELETED' 
+                  },
+                });
+                
+                if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE) {
+                  await this.prismaRepository.messageUpdate.create({
+                    data: {
+                      fromMe: deleteKey.fromMe,
+                      keyId: deleteKey.id,
+                      remoteJid: deleteKey.remoteJid,
+                      status: 'DELETED',
+                      instanceId: this.instanceId,
+                      messageId: (oldMessage as any).id,
+                    },
+                  });
+                }
+              }
+            }
+          }
+
+          if (editedMessage && isActualEdit && !isMessageDelete) {
             if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled)
               this.chatwootService.eventWhatsapp(
                 'messages.edit',
@@ -1104,16 +1156,27 @@ export class BaileysStartupService extends ChannelStartupService {
             await this.sendDataWebhook(Events.MESSAGES_EDITED, editedMessage);
             const oldMessage = await this.getMessage(editedMessage.key, true);
             if ((oldMessage as any)?.id) {
-              const editedMessageTimestamp = Long.isLong(editedMessage?.timestampMs)
-                ? Math.floor(editedMessage.timestampMs.toNumber() / 1000)
-                : Math.floor((editedMessage.timestampMs as number) / 1000);
-
+              // A nova mensagem editada tem um ID diferente (received.key.id)
+              const newMessageKey = received.key;
+              const existingKey = typeof (oldMessage as any)?.key === 'object' && (oldMessage as any).key !== null ? (oldMessage as any).key : {};
+              
+              // Manter o timestamp original da mensagem, não usar o timestamp da edição
               await this.prismaRepository.message.update({
                 where: { id: (oldMessage as any).id },
                 data: {
                   message: editedMessage.editedMessage as any,
-                  messageTimestamp: editedMessageTimestamp,
+                  // messageTimestamp não é atualizado - mantém o timestamp original
                   status: 'EDITED',
+                  // Adicionar referência para a nova mensagem editada na key
+                  key: { 
+                    ...existingKey, 
+                    editedMessageKey: {
+                      id: newMessageKey.id,
+                      remoteJid: newMessageKey.remoteJid,
+                      fromMe: newMessageKey.fromMe,
+                      participant: newMessageKey.participant
+                    }
+                  },
                 },
               });
               await this.prismaRepository.messageUpdate.create({
@@ -1455,7 +1518,7 @@ export class BaileysStartupService extends ChannelStartupService {
             remoteJid: key?.remoteJid,
             fromMe: key.fromMe,
             participant: key?.remoteJid,
-            status: status[update.status] ?? 'DELETED',
+            status: status[update.status] ?? (update.message === null ? 'DELETED' : 'UNKNOWN'),
             pollUpdates,
             instanceId: this.instanceId,
           };
@@ -1472,6 +1535,18 @@ export class BaileysStartupService extends ChannelStartupService {
 
           if (update.message === null && update.status === undefined) {
             this.sendDataWebhook(Events.MESSAGES_DELETE, key);
+
+            // Marcar a mensagem como deletada ao invés de apagar do banco
+            if (findMessage) {
+              const existingKey = typeof findMessage?.key === 'object' && findMessage.key !== null ? findMessage.key : {};
+              await this.prismaRepository.message.update({
+                where: { id: findMessage.id },
+                data: { 
+                  key: { ...existingKey, deleted: true }, 
+                  status: 'DELETED' 
+                },
+              });
+            }
 
             if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE)
               await this.prismaRepository.messageUpdate.create({ data: message });
@@ -1519,7 +1594,8 @@ export class BaileysStartupService extends ChannelStartupService {
 
           this.sendDataWebhook(Events.MESSAGES_UPDATE, message);
 
-          if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE)
+          // Só criar MessageUpdate se o status for válido (não UNKNOWN)
+          if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE && message.status !== 'UNKNOWN')
             await this.prismaRepository.messageUpdate.create({ data: message });
 
           const existingChat = await this.prismaRepository.chat.findFirst({
@@ -3799,32 +3875,29 @@ export class BaileysStartupService extends ChannelStartupService {
       if (response) {
         const messageId = response.message?.protocolMessage?.key?.id;
         if (messageId) {
-          const isLogicalDeleted = configService.get<Database>('DATABASE').DELETE_DATA.LOGICAL_MESSAGE_DELETE;
           let message = await this.prismaRepository.message.findFirst({
             where: { key: { path: ['id'], equals: messageId } },
           });
-          if (isLogicalDeleted) {
-            if (!message) return response;
-            const existingKey = typeof message?.key === 'object' && message.key !== null ? message.key : {};
-            message = await this.prismaRepository.message.update({
-              where: { id: message.id },
-              data: { key: { ...existingKey, deleted: true }, status: 'DELETED' },
-            });
-            if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE) {
-              const messageUpdate: any = {
-                messageId: message.id,
-                keyId: messageId,
-                remoteJid: response.key.remoteJid,
-                fromMe: response.key.fromMe,
-                participant: response.key?.remoteJid,
-                status: 'DELETED',
-                instanceId: this.instanceId,
-              };
-              await this.prismaRepository.messageUpdate.create({ data: messageUpdate });
-            }
-          } else {
-            if (!message) return response;
-            await this.prismaRepository.message.deleteMany({ where: { id: message.id } });
+          if (!message) return response;
+          
+          // Sempre marcar como deletada ao invés de apagar do banco
+          const existingKey = typeof message?.key === 'object' && message.key !== null ? message.key : {};
+          message = await this.prismaRepository.message.update({
+            where: { id: message.id },
+            data: { key: { ...existingKey, deleted: true }, status: 'DELETED' },
+          });
+          
+          if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE) {
+            const messageUpdate: any = {
+              messageId: message.id,
+              keyId: messageId,
+              remoteJid: response.key.remoteJid,
+              fromMe: response.key.fromMe,
+              participant: response.key?.remoteJid,
+              status: 'DELETED',
+              instanceId: this.instanceId,
+            };
+            await this.prismaRepository.messageUpdate.create({ data: messageUpdate });
           }
           this.sendDataWebhook(Events.MESSAGES_DELETE, {
             id: message.id,
@@ -3845,6 +3918,54 @@ export class BaileysStartupService extends ChannelStartupService {
     } catch (error) {
       throw new InternalServerErrorException('Error while deleting message for everyone', error?.toString());
     }
+  }
+
+  public async deleteMultipleMessages(data: { messages: DeleteMessage[] }) {
+    const results = [];
+    const errors = [];
+
+    for (const [index, message] of data.messages.entries()) {
+      try {
+        this.logger.log(`Deleting message ${index + 1}/${data.messages.length}: ${message.id}`);
+        
+        const result = await this.deleteMessage(message);
+        results.push({
+          messageId: message.id,
+          success: true,
+          result: result
+        });
+
+        // Pequeno delay entre deletações para evitar rate limiting
+        if (index < data.messages.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      } catch (error) {
+        this.logger.error(`Error deleting message ${message.id}: ${error}`);
+        errors.push({
+          messageId: message.id,
+          success: false,
+          error: error.message || error.toString()
+        });
+      }
+    }
+
+    const summary = {
+      total: data.messages.length,
+      successful: results.length,
+      failed: errors.length,
+      results: results,
+      errors: errors
+    };
+
+    this.logger.log(`Bulk delete completed: ${summary.successful}/${summary.total} successful`);
+
+    if (errors.length > 0) {
+      this.sendDataWebhook(Events.MESSAGES_DELETE, { ...summary, type: 'BULK_DELETE_PARTIAL' });
+    } else {
+      this.sendDataWebhook(Events.MESSAGES_DELETE, { ...summary, type: 'BULK_DELETE_SUCCESS' });
+    }
+
+    return summary;
   }
 
   public async mapMediaType(mediaType) {
@@ -4236,12 +4357,27 @@ export class BaileysStartupService extends ChannelStartupService {
             } else {
               oldMessage.message[oldMessage.messageType].caption = data.text;
             }
+            
+            // A nova mensagem editada tem um ID diferente (messageSent.key.id)
+            const newMessageKey = messageSent.key;
+            const existingKey = typeof message?.key === 'object' && message.key !== null ? message.key : {};
+            
             message = await this.prismaRepository.message.update({
               where: { id: message.id },
               data: {
                 message: oldMessage.message,
                 status: 'EDITED',
-                messageTimestamp: Math.floor(Date.now() / 1000), // Convert to int32 by dividing by 1000 to get seconds
+                // messageTimestamp não é atualizado - mantém o timestamp original
+                // Adicionar referência para a nova mensagem editada na key
+                key: { 
+                  ...existingKey, 
+                  editedMessageKey: {
+                    id: newMessageKey.id,
+                    remoteJid: newMessageKey.remoteJid,
+                    fromMe: newMessageKey.fromMe,
+                    participant: newMessageKey.participant
+                  }
+                },
               },
             });
 

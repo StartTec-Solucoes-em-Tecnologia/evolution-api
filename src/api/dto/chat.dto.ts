@@ -109,6 +109,10 @@ export class DeleteMessage {
   remoteJid: string;
   participant?: string;
 }
+
+export class DeleteMultipleMessages {
+  messages: DeleteMessage[];
+}
 export class Options {
   delay?: number;
   presence?: WAPresence;
