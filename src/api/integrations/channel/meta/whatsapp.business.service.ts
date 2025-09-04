@@ -1,4 +1,5 @@
-import { NumberBusiness } from '@api/dto/chat.dto';
+import { NumberBusiness, type ForwardMessagesDto } from '@api/dto/chat.dto';
+import type { InstanceDto } from '@api/dto/instance.dto';
 import {
   ContactMessage,
   MediaMessage,
@@ -1149,6 +1150,10 @@ export class BusinessStartupService extends ChannelStartupService {
       this.logger.error(error);
       throw new BadRequestException(error.toString());
     }
+  }
+
+  public async forwardMessages({ instanceName }: InstanceDto, data: ForwardMessagesDto) {
+    throw new BadRequestException('Not implemented');
   }
 
   // Send Message Controller

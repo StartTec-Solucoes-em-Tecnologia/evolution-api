@@ -19,6 +19,7 @@ import {
   audioMessageSchema,
   buttonsMessageSchema,
   contactMessageSchema,
+  forwardMessagesSchema,
   listMessageSchema,
   locationMessageSchema,
   mediaMessageSchema,
@@ -28,11 +29,12 @@ import {
   statusMessageSchema,
   stickerMessageSchema,
   templateMessageSchema,
-  textMessageSchema,
+  textMessageSchema
 } from '@validate/validate.schema';
 import { RequestHandler, Router } from 'express';
 import multer from 'multer';
 
+import { ForwardMessagesDto } from '@api/dto/chat.dto';
 import { HttpStatus } from './index.router';
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -49,6 +51,16 @@ export class MessageRouter extends RouterBroker {
           execute: (instance, data) => sendMessageController.sendTemplate(instance, data),
         });
 
+        return res.status(HttpStatus.CREATED).json(response);
+      })
+      .post(this.routerPath('forwardMessages'), ...guards, async (req, res) => {
+        const response = await this.dataValidate<ForwardMessagesDto>({
+          request: req,
+          schema: forwardMessagesSchema,
+          ClassRef: ForwardMessagesDto,
+          execute: (instance, data) => sendMessageController.forwardMessages(instance, data),
+        });
+        
         return res.status(HttpStatus.CREATED).json(response);
       })
       .post(this.routerPath('sendText'), ...guards, async (req, res) => {

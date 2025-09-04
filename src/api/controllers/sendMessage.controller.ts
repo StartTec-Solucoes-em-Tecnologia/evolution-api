@@ -1,3 +1,4 @@
+import type { ForwardMessagesDto } from '@api/dto/chat.dto';
 import { InstanceDto } from '@api/dto/instance.dto';
 import {
   SendAudioDto,
@@ -37,6 +38,10 @@ export class SendMessageController {
 
   public async sendText({ instanceName }: InstanceDto, data: SendTextDto) {
     return await this.waMonitor.waInstances[instanceName].textMessage(data);
+  }
+
+  public async forwardMessages({ instanceName }: InstanceDto, data: ForwardMessagesDto) {
+    return await this.waMonitor.waInstances[instanceName].forwardMessages(data);
   }
 
   public async sendMedia({ instanceName }: InstanceDto, data: SendMediaDto, file?: any) {

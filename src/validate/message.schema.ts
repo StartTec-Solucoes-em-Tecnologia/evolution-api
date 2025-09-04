@@ -65,6 +65,39 @@ export const offerCallSchema: JSONSchema7 = {
   required: ['number', 'callDuration'],
 };
 
+export const forwardMessagesSchema: JSONSchema7 = {
+  $id: v4(),
+  type: 'object',
+  properties: {
+    keys: {
+      type: 'array',
+      minItems: 1,
+      uniqueItems: true,
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          remoteJid: { type: 'string' },
+          fromMe: { type: 'boolean', enum: [true, false] },
+        },
+        required: ['id', 'remoteJid', 'fromMe'],
+        ...isNotEmpty('id', 'remoteJid'),
+      },
+    },
+    numbers: {
+      type: 'array',
+      minItems: 1,
+      uniqueItems: true,
+      items: {
+        type: 'string',
+        pattern: '^\\d+',
+        description: '"numbers" must be an array of numeric strings',
+      },
+    },
+  },
+  required: ['keys', 'numbers'],
+};
+
 export const textMessageSchema: JSONSchema7 = {
   $id: v4(),
   type: 'object',

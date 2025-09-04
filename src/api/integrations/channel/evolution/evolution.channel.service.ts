@@ -1,3 +1,4 @@
+import type { ForwardMessagesDto } from '@api/dto/chat.dto';
 import { InstanceDto } from '@api/dto/instance.dto';
 import {
   MediaMessage,
@@ -530,6 +531,9 @@ export class EvolutionStartupService extends ChannelStartupService {
       this.logger.error(error);
       throw new BadRequestException(error.toString());
     }
+  }
+  public async forwardMessages({ instanceName }: InstanceDto, data: ForwardMessagesDto) {
+    throw new BadRequestException('Not implemented');
   }
 
   public async textMessage(data: SendTextDto, isIntegration = false) {
