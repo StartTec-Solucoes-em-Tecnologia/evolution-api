@@ -14,7 +14,6 @@ import {
   SendPresenceDto,
   UpdateMessageDto,
   WhatsAppNumberDto,
-  type ForwardMessagesDto,
   type ReadChatDto,
 } from '@api/dto/chat.dto';
 import {
@@ -1093,7 +1092,7 @@ export class BaileysStartupService extends ChannelStartupService {
           const editedMessage =
             received?.message?.protocolMessage || received?.message?.editedMessage?.message?.protocolMessage;
 
-          // Verificar se é realmente uma edição e não uma deleção
+            // Verificar se é realmente uma edição e não uma deleção
           // Mensagens deletadas vêm com message: null
           const isMessageDelete =
             received?.message === null ||
@@ -1163,32 +1162,32 @@ export class BaileysStartupService extends ChannelStartupService {
             await this.sendDataWebhook(Events.MESSAGES_EDITED, editedMessage);
             const oldMessage = await this.getMessage(editedMessage.key, true);
             if ((oldMessage as any)?.id) {
-              // A nova mensagem editada tem um ID diferente (received.key.id)
-              const newMessageKey = received.key;
-              const existingKey =
-                typeof (oldMessage as any)?.key === 'object' && (oldMessage as any).key !== null
-                  ? (oldMessage as any).key
-                  : {};
-
-              // Manter o timestamp original da mensagem, não usar o timestamp da edição
-              await this.prismaRepository.message.update({
-                where: { id: (oldMessage as any).id },
-                data: {
-                  message: editedMessage.editedMessage as any,
-                  // messageTimestamp não é atualizado - mantém o timestamp original
-                  status: 'EDITED',
-                  // Adicionar referência para a nova mensagem editada na key
-                  key: {
-                    ...existingKey,
-                    editedMessageKey: {
-                      id: newMessageKey.id,
-                      remoteJid: newMessageKey.remoteJid,
-                      fromMe: newMessageKey.fromMe,
-                      participant: newMessageKey.participant,
-                    },
-                  },
-                },
-              });
+               // A nova mensagem editada tem um ID diferente (received.key.id)
+               const newMessageKey = received.key;
+               const existingKey =
+                 typeof (oldMessage as any)?.key === 'object' && (oldMessage as any).key !== null
+                   ? (oldMessage as any).key
+                   : {};
+ 
+               // Manter o timestamp original da mensagem, não usar o timestamp da edição
+               await this.prismaRepository.message.update({
+                 where: { id: (oldMessage as any).id },
+                 data: {
+                   message: editedMessage.editedMessage as any,
+                   // messageTimestamp não é atualizado - mantém o timestamp original
+                   status: 'EDITED',
+                   // Adicionar referência para a nova mensagem editada na key
+                   key: {
+                     ...existingKey,
+                     editedMessageKey: {
+                       id: newMessageKey.id,
+                       remoteJid: newMessageKey.remoteJid,
+                       fromMe: newMessageKey.fromMe,
+                       participant: newMessageKey.participant,
+                     },
+                   },
+                 },
+               });
               await this.prismaRepository.messageUpdate.create({
                 data: {
                   fromMe: editedMessage.key.fromMe,
@@ -1256,6 +1255,7 @@ export class BaileysStartupService extends ChannelStartupService {
           }
 
           const messageRaw = this.prepareMessage(received);
+
           const isMedia =
             received?.message?.imageMessage ||
             received?.message?.videoMessage ||
@@ -1528,7 +1528,7 @@ export class BaileysStartupService extends ChannelStartupService {
             remoteJid: key?.remoteJid,
             fromMe: key.fromMe,
             participant: key?.remoteJid,
-            status: status[update.status] ?? (update.message === null ? 'DELETED' : 'UNKNOWN'),
+            status: status[update.status] ?? (update.message === null ? 'DELETED' : 'EDITED'),
             pollUpdates,
             instanceId: this.instanceId,
           };
@@ -1605,9 +1605,9 @@ export class BaileysStartupService extends ChannelStartupService {
 
           this.sendDataWebhook(Events.MESSAGES_UPDATE, message);
 
-          // Só criar MessageUpdate se o status for válido (não UNKNOWN)
-          if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE && message.status !== 'UNKNOWN')
-            await this.prismaRepository.messageUpdate.create({ data: message });
+            // Só criar MessageUpdate se o status for válido (não UNKNOWN)
+            if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE && message.status !== 'UNKNOWN')
+              await this.prismaRepository.messageUpdate.create({ data: message });
 
           const existingChat = await this.prismaRepository.chat.findFirst({
             where: { instanceId: this.instanceId, remoteJid: message.remoteJid },
@@ -2221,7 +2221,132 @@ export class BaileysStartupService extends ChannelStartupService {
         messageSent = await this.sendMessage(sender, message, mentions, linkPreview, quoted);
       }
 
-      return messageSent;
+      if (Long.isLong(messageSent?.messageTimestamp)) {
+        messageSent.messageTimestamp = messageSent.messageTimestamp?.toNumber();
+      }
+
+      const messageRaw = this.prepareMessage(messageSent);
+
+      const isMedia =
+        messageSent?.message?.imageMessage ||
+        messageSent?.message?.videoMessage ||
+        messageSent?.message?.stickerMessage ||
+        messageSent?.message?.ptvMessage ||
+        messageSent?.message?.documentMessage ||
+        messageSent?.message?.documentWithCaptionMessage ||
+        messageSent?.message?.ptvMessage ||
+        messageSent?.message?.audioMessage;
+
+      if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled && !isIntegration) {
+        this.chatwootService.eventWhatsapp(
+          Events.SEND_MESSAGE,
+          { instanceName: this.instance.name, instanceId: this.instanceId },
+          messageRaw,
+        );
+      }
+
+      if (this.configService.get<Openai>('OPENAI').ENABLED && messageRaw?.message?.audioMessage) {
+        const openAiDefaultSettings = await this.prismaRepository.openaiSetting.findFirst({
+          where: { instanceId: this.instanceId },
+          include: { OpenaiCreds: true },
+        });
+
+        if (openAiDefaultSettings && openAiDefaultSettings.openaiCredsId && openAiDefaultSettings.speechToText) {
+          messageRaw.message.speechToText = `[audio] ${await this.openaiService.speechToText(messageRaw, this)}`;
+        }
+      }
+
+      if (this.configService.get<Database>('DATABASE').SAVE_DATA.NEW_MESSAGE) {
+        const msg = await this.prismaRepository.message.create({ data: messageRaw });
+
+        if (isMedia && this.configService.get<S3>('S3').ENABLE) {
+          try {
+            const message: any = messageRaw;
+
+            // Verificação adicional para garantir que há conteúdo de mídia real
+            const hasRealMedia = this.hasValidMediaContent(message);
+
+            if (!hasRealMedia) {
+              this.logger.warn('Message detected as media but contains no valid media content');
+            } else {
+              const media = await this.getBase64FromMediaMessage({ message }, true);
+
+              const { buffer, mediaType, fileName, size } = media;
+
+              const mimetype = mimeTypes.lookup(fileName).toString();
+
+              const fullName = join(
+                `${this.instance.id}`,
+                messageRaw.key.remoteJid,
+                `${messageRaw.key.id}`,
+                mediaType,
+                fileName,
+              );
+
+              await s3Service.uploadFile(fullName, buffer, size.fileLength?.low, { 'Content-Type': mimetype });
+
+              await this.prismaRepository.media.create({
+                data: { messageId: msg.id, instanceId: this.instanceId, type: mediaType, fileName: fullName, mimetype },
+              });
+
+              const mediaUrl = await s3Service.getObjectUrl(fullName);
+
+              messageRaw.message.mediaUrl = mediaUrl;
+
+              await this.prismaRepository.message.update({ where: { id: msg.id }, data: messageRaw });
+            }
+          } catch (error) {
+            this.logger.error(['Error on upload file to minio', error?.message, error?.stack]);
+          }
+        }
+      }
+
+      if (this.localWebhook.enabled) {
+        if (isMedia && this.localWebhook.webhookBase64) {
+          try {
+            const buffer = await downloadMediaMessage(
+              { key: messageRaw.key, message: messageRaw?.message },
+              'buffer',
+              {},
+              { logger: P({ level: 'error' }) as any, reuploadRequest: this.client.updateMediaMessage },
+            );
+
+            if (buffer) {
+              messageRaw.message.base64 = buffer.toString('base64');
+            } else {
+              // retry to download media
+              const buffer = await downloadMediaMessage(
+                { key: messageRaw.key, message: messageRaw?.message },
+                'buffer',
+                {},
+                { logger: P({ level: 'error' }) as any, reuploadRequest: this.client.updateMediaMessage },
+              );
+
+              if (buffer) {
+                messageRaw.message.base64 = buffer.toString('base64');
+              }
+            }
+          } catch (error) {
+            this.logger.error(['Error converting media to base64', error?.message]);
+          }
+        }
+      }
+
+      this.logger.log(messageRaw);
+
+      this.sendDataWebhook(Events.SEND_MESSAGE, messageRaw);
+
+      if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled && isIntegration) {
+        await chatbotController.emit({
+          instance: { instanceName: this.instance.name, instanceId: this.instanceId },
+          remoteJid: messageRaw.key.remoteJid,
+          msg: messageRaw,
+          pushName: messageRaw.pushName,
+          isIntegration,
+        });
+      }
+
+      return messageRaw;
     } catch (error) {
       this.logger.error(error);
       throw new BadRequestException(error.toString());
@@ -2314,7 +2439,7 @@ export class BaileysStartupService extends ChannelStartupService {
       isIntegration,
     );
   }
-
+  
   // public async forwardMessages(data: ForwardMessagesDto) {
   //   console.log({ forwardData: data });
   //   if (!data.keys || data.keys.length === 0) {
@@ -3543,24 +3668,24 @@ export class BaileysStartupService extends ChannelStartupService {
           if (!message) return response;
 
           // Sempre marcar como deletada ao invés de apagar do banco
-          const existingKey = typeof message?.key === 'object' && message.key !== null ? message.key : {};
-          message = await this.prismaRepository.message.update({
-            where: { id: message.id },
-            data: { key: { ...existingKey, deleted: true }, status: 'DELETED' },
-          });
+            const existingKey = typeof message?.key === 'object' && message.key !== null ? message.key : {};
+            message = await this.prismaRepository.message.update({
+              where: { id: message.id },
+              data: { key: { ...existingKey, deleted: true }, status: 'DELETED' },
+            });
 
-          if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE) {
-            const messageUpdate: any = {
-              messageId: message.id,
-              keyId: messageId,
-              remoteJid: response.key.remoteJid,
-              fromMe: response.key.fromMe,
-              participant: response.key?.remoteJid,
-              status: 'DELETED',
-              instanceId: this.instanceId,
-            };
-            await this.prismaRepository.messageUpdate.create({ data: messageUpdate });
-          }
+            if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE) {
+              const messageUpdate: any = {
+                messageId: message.id,
+                keyId: messageId,
+                remoteJid: response.key.remoteJid,
+                fromMe: response.key.fromMe,
+                participant: response.key?.remoteJid,
+                status: 'DELETED',
+                instanceId: this.instanceId,
+              };
+              await this.prismaRepository.messageUpdate.create({ data: messageUpdate });
+            }
           this.sendDataWebhook(Events.MESSAGES_DELETE, {
             id: message.id,
             instanceId: message.instanceId,
@@ -4018,8 +4143,8 @@ export class BaileysStartupService extends ChannelStartupService {
               oldMessage.message.conversation = data.text;
             } else {
               oldMessage.message[oldMessage.messageType].caption = data.text;
-            }
-
+            }  
+            
             // A nova mensagem editada tem um ID diferente (messageSent.key.id)
             const newMessageKey = messageSent.key;
             const existingKey = typeof message?.key === 'object' && message.key !== null ? message.key : {};
@@ -4850,7 +4975,6 @@ export class BaileysStartupService extends ChannelStartupService {
         instanceId: true,
         source: true,
         contextInfo: true,
-        status: true,
         MessageUpdate: { select: { status: true } },
       },
     });
