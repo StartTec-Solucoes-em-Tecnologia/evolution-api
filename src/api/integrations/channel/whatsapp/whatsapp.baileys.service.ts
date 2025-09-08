@@ -4976,6 +4976,7 @@ export class BaileysStartupService extends ChannelStartupService {
         instanceId: true,
         source: true,
         contextInfo: true,
+        status: true,
         MessageUpdate: { select: { status: true } },
       },
     });
