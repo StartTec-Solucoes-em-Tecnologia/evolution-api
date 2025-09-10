@@ -112,7 +112,7 @@ import makeWASocket, {
   isJidBroadcast,
   isJidGroup,
   isJidNewsletter,
-  isJidUser,
+  isPnUser,
   makeCacheableSignalKeyStore,
   MessageUpsertType,
   MessageUserReceiptUpdate,
@@ -964,17 +964,18 @@ export class BaileysStartupService extends ChannelStartupService {
 
         const messagesRaw: any[] = [];
 
+        // Create a more robust duplicate detection using key.id + instanceId combination
         const messagesRepository: Set<string> = new Set(
           chatwootImport.getRepositoryMessagesCache(instance) ??
             (
               await this.prismaRepository.message.findMany({
-                select: { key: true },
+                select: { key: true, instanceId: true },
                 where: { instanceId: this.instanceId },
               })
             ).map((message) => {
               const key = message.key as { id: string };
-
-              return key.id;
+              // Create a unique identifier combining key.id and instanceId
+              return `${key.id}_${message.instanceId}`;
             }),
         );
 
@@ -987,8 +988,8 @@ export class BaileysStartupService extends ChannelStartupService {
             continue;
           }
 
-          if (m.key.remoteJid?.includes('@lid') && m.key.senderPn) {
-            m.key.remoteJid = m.key.senderPn;
+          if (m.key.remoteJid?.includes('@lid') && m.key.remoteJidAlt) {
+            m.key.remoteJid = m.key.remoteJidAlt;
           }
 
           if (Long.isLong(m?.messageTimestamp)) {
@@ -1001,7 +1002,9 @@ export class BaileysStartupService extends ChannelStartupService {
             }
           }
 
-          if (messagesRepository?.has(m.key.id)) {
+          // Check for duplicates using the same unique identifier format
+          const messageUniqueId = `${m.key.id}_${this.instanceId}`;
+          if (messagesRepository?.has(messageUniqueId)) {
             continue;
           }
 
@@ -1014,13 +1017,42 @@ export class BaileysStartupService extends ChannelStartupService {
             }
           }
 
-          messagesRaw.push(this.prepareMessage(m));
+          const preparedMessage = this.prepareMessage(m);
+          messagesRaw.push(preparedMessage);
+
+          // Add to cache to prevent duplicates within the same batch
+          messagesRepository.add(messageUniqueId);
         }
 
         this.sendDataWebhook(Events.MESSAGES_SET, [...messagesRaw]);
 
         if (this.configService.get<Database>('DATABASE').SAVE_DATA.HISTORIC) {
-          await this.prismaRepository.message.createMany({ data: messagesRaw, skipDuplicates: true });
+          // Process messages in batches to avoid serialization errors
+          const BATCH_SIZE = 500; // Smaller batch size for history messages
+          
+          for (let i = 0; i < messagesRaw.length; i += BATCH_SIZE) {
+            const batch = messagesRaw.slice(i, i + BATCH_SIZE);
+            
+            try {
+              await this.prismaRepository.message.createMany({ 
+                data: batch, 
+                skipDuplicates: true 
+              });
+            } catch (error) {
+              this.logger.error(`Error inserting message batch ${i}-${i + batch.length}: ${error.message}`);
+              
+              // If batch fails, try inserting one by one to identify problematic messages
+              for (const message of batch) {
+                try {
+                  await this.prismaRepository.message.create({ 
+                    data: message
+                  });
+                } catch (singleError) {
+                  this.logger.error(`Error inserting single message: ${singleError.message} - MessageId: ${message.key?.id}, Timestamp: ${message.messageTimestamp}`);
+                }
+              }
+            }
+          }
         }
 
         if (
@@ -1053,9 +1085,9 @@ export class BaileysStartupService extends ChannelStartupService {
     ) => {
       try {
         for (const received of messages) {
-          if (received.key.remoteJid?.includes('@lid') && received.key.senderPn) {
+          if (received.key.remoteJid?.includes('@lid') && received.key.remoteJidAlt) {
             (received.key as { previousRemoteJid?: string | null }).previousRemoteJid = received.key.remoteJid;
-            received.key.remoteJid = received.key.senderPn;
+            received.key.remoteJid = received.key.remoteJidAlt;
           }
           if (
             received?.messageStubParameters?.some?.((param) =>
@@ -1093,7 +1125,7 @@ export class BaileysStartupService extends ChannelStartupService {
           const editedMessage =
             received?.message?.protocolMessage || received?.message?.editedMessage?.message?.protocolMessage;
 
-            // Verificar se é realmente uma edição e não uma deleção
+          // Verificar se é realmente uma edição e não uma deleção
           // Mensagens deletadas vêm com message: null
           const isMessageDelete =
             received?.message === null ||
@@ -1163,32 +1195,32 @@ export class BaileysStartupService extends ChannelStartupService {
             await this.sendDataWebhook(Events.MESSAGES_EDITED, editedMessage);
             const oldMessage = await this.getMessage(editedMessage.key, true);
             if ((oldMessage as any)?.id) {
-               // A nova mensagem editada tem um ID diferente (received.key.id)
-               const newMessageKey = received.key;
-               const existingKey =
-                 typeof (oldMessage as any)?.key === 'object' && (oldMessage as any).key !== null
-                   ? (oldMessage as any).key
-                   : {};
- 
-               // Manter o timestamp original da mensagem, não usar o timestamp da edição
-               await this.prismaRepository.message.update({
-                 where: { id: (oldMessage as any).id },
-                 data: {
-                   message: editedMessage.editedMessage as any,
-                   // messageTimestamp não é atualizado - mantém o timestamp original
-                   status: 'EDITED',
-                   // Adicionar referência para a nova mensagem editada na key
-                   key: {
-                     ...existingKey,
-                     editedMessageKey: {
-                       id: newMessageKey.id,
-                       remoteJid: newMessageKey.remoteJid,
-                       fromMe: newMessageKey.fromMe,
-                       participant: newMessageKey.participant,
-                     },
-                   },
-                 },
-               });
+              // A nova mensagem editada tem um ID diferente (received.key.id)
+              const newMessageKey = received.key;
+              const existingKey =
+                typeof (oldMessage as any)?.key === 'object' && (oldMessage as any).key !== null
+                  ? (oldMessage as any).key
+                  : {};
+
+              // Manter o timestamp original da mensagem, não usar o timestamp da edição
+              await this.prismaRepository.message.update({
+                where: { id: (oldMessage as any).id },
+                data: {
+                  message: editedMessage.editedMessage as any,
+                  // messageTimestamp não é atualizado - mantém o timestamp original
+                  status: 'EDITED',
+                  // Adicionar referência para a nova mensagem editada na key
+                  key: {
+                    ...existingKey,
+                    editedMessageKey: {
+                      id: newMessageKey.id,
+                      remoteJid: newMessageKey.remoteJid,
+                      fromMe: newMessageKey.fromMe,
+                      participant: newMessageKey.participant,
+                    },
+                  },
+                },
+              });
               await this.prismaRepository.messageUpdate.create({
                 data: {
                   fromMe: editedMessage.key.fromMe,
@@ -1304,6 +1336,19 @@ export class BaileysStartupService extends ChannelStartupService {
           }
 
           if (this.configService.get<Database>('DATABASE').SAVE_DATA.NEW_MESSAGE) {
+            // Check if message already exists to prevent duplicates
+            const existingMessage = await this.prismaRepository.message.findFirst({
+              where: {
+                instanceId: this.instanceId,
+                key: { path: ['id'], equals: received.key.id },
+              },
+            });
+
+            if (existingMessage) {
+              this.logger.debug(`Message already exists, skipping duplicate: ${received.key.id}`);
+              continue;
+            }
+
             const msg = await this.prismaRepository.message.create({ data: messageRaw });
 
             const { remoteJid } = received.key;
@@ -1485,8 +1530,8 @@ export class BaileysStartupService extends ChannelStartupService {
           continue;
         }
 
-        if (key.remoteJid?.includes('@lid') && key.senderPn) {
-          key.remoteJid = key.senderPn;
+        if (key.remoteJid?.includes('@lid') && key.remoteJidAlt) {
+          key.remoteJid = key.remoteJidAlt;
         }
 
         const updateKey = `${this.instance.id}_${key.id}_${update.status}`;
@@ -1606,9 +1651,9 @@ export class BaileysStartupService extends ChannelStartupService {
 
           this.sendDataWebhook(Events.MESSAGES_UPDATE, message);
 
-            // Só criar MessageUpdate se o status for válido (não UNKNOWN)
-            if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE && message.status !== 'UNKNOWN')
-              await this.prismaRepository.messageUpdate.create({ data: message });
+          // Só criar MessageUpdate se o status for válido (não UNKNOWN)
+          if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE && message.status !== 'UNKNOWN')
+            await this.prismaRepository.messageUpdate.create({ data: message });
 
           const existingChat = await this.prismaRepository.chat.findFirst({
             where: { instanceId: this.instanceId, remoteJid: message.remoteJid },
@@ -2002,7 +2047,7 @@ export class BaileysStartupService extends ChannelStartupService {
         quoted,
       });
       const id = await this.client.relayMessage(sender, message, { messageId });
-      m.key = { id: id, remoteJid: sender, participant: isJidUser(sender) ? sender : undefined, fromMe: true };
+      m.key = { id: id, remoteJid: sender, participant: isPnUser(sender) ? sender : undefined, fromMe: true };
       for (const [key, value] of Object.entries(m)) {
         if (!value || (isArray(value) && value.length) === 0) {
           delete m[key];
@@ -2440,7 +2485,7 @@ export class BaileysStartupService extends ChannelStartupService {
       isIntegration,
     );
   }
-  
+
   public async forwardMessages(data: ForwardMessagesDto) {
     console.log({ forwardData: data });
     if (!data.keys || data.keys.length === 0) {
@@ -3503,34 +3548,51 @@ export class BaileysStartupService extends ChannelStartupService {
     try {
       const keys: proto.IMessageKey[] = [];
       data.readMessages.forEach((read) => {
-        if (isJidGroup(read.remoteJid) || isJidUser(read.remoteJid)) {
+        if (isJidGroup(read.remoteJid) || isPnUser(read.remoteJid)) {
           keys.push({ remoteJid: read.remoteJid, fromMe: read.fromMe, id: read.id });
         }
       });
       await this.client.readMessages(keys);
 
-      const messages = await this.prismaRepository.message.findMany({
-        where: {
-          instanceId: this.instanceId,
-          OR: keys.map((k) => ({
-            AND: [
-              { key: { path: ['remoteJid'], equals: k.remoteJid } },
-              { key: { path: ['fromMe'], equals: k.fromMe } },
-              { key: { path: ['id'], equals: k.id } },
-              { status: { notIn: ['READ', 'PLAYED'] } },
-            ],
-          })),
-        },
-      });
-      const messageIds = messages.map((msg) => msg.id).filter((id) => !!id);
-      // Fixes issue where all messages are marked as read when messageIds is empty
-      if (messageIds.length)
-        await this.prismaRepository.message.updateMany({
+      // Process in batches to avoid "too many bind variables" error
+      const BATCH_SIZE = 1000; // Conservative batch size to stay well under 32767 limit
+      const allMessageIds: string[] = [];
+
+      for (let i = 0; i < keys.length; i += BATCH_SIZE) {
+        const batch = keys.slice(i, i + BATCH_SIZE);
+
+        const messages = await this.prismaRepository.message.findMany({
           where: {
-            id: { in: messageIds },
+            instanceId: this.instanceId,
+            OR: batch.map((k) => ({
+              AND: [
+                { key: { path: ['remoteJid'], equals: k.remoteJid } },
+                { key: { path: ['fromMe'], equals: k.fromMe } },
+                { key: { path: ['id'], equals: k.id } },
+                { status: { notIn: ['READ', 'PLAYED'] } },
+              ],
+            })),
           },
-          data: { status: 'READ' },
         });
+
+        const batchMessageIds = messages.map((msg) => msg.id).filter((id) => !!id);
+        allMessageIds.push(...batchMessageIds);
+      }
+
+      // Fixes issue where all messages are marked as read when messageIds is empty
+      if (allMessageIds.length) {
+        // Process message updates in batches as well
+        for (let i = 0; i < allMessageIds.length; i += BATCH_SIZE) {
+          const batchMessageIds = allMessageIds.slice(i, i + BATCH_SIZE);
+
+          await this.prismaRepository.message.updateMany({
+            where: {
+              id: { in: batchMessageIds },
+            },
+            data: { status: 'READ' },
+          });
+        }
+      }
 
       return { message: 'Read messages', read: 'success' };
     } catch (error) {
@@ -3669,24 +3731,24 @@ export class BaileysStartupService extends ChannelStartupService {
           if (!message) return response;
 
           // Sempre marcar como deletada ao invés de apagar do banco
-            const existingKey = typeof message?.key === 'object' && message.key !== null ? message.key : {};
-            message = await this.prismaRepository.message.update({
-              where: { id: message.id },
-              data: { key: { ...existingKey, deleted: true }, status: 'DELETED' },
-            });
+          const existingKey = typeof message?.key === 'object' && message.key !== null ? message.key : {};
+          message = await this.prismaRepository.message.update({
+            where: { id: message.id },
+            data: { key: { ...existingKey, deleted: true }, status: 'DELETED' },
+          });
 
-            if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE) {
-              const messageUpdate: any = {
-                messageId: message.id,
-                keyId: messageId,
-                remoteJid: response.key.remoteJid,
-                fromMe: response.key.fromMe,
-                participant: response.key?.remoteJid,
-                status: 'DELETED',
-                instanceId: this.instanceId,
-              };
-              await this.prismaRepository.messageUpdate.create({ data: messageUpdate });
-            }
+          if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE) {
+            const messageUpdate: any = {
+              messageId: message.id,
+              keyId: messageId,
+              remoteJid: response.key.remoteJid,
+              fromMe: response.key.fromMe,
+              participant: response.key?.remoteJid,
+              status: 'DELETED',
+              instanceId: this.instanceId,
+            };
+            await this.prismaRepository.messageUpdate.create({ data: messageUpdate });
+          }
           this.sendDataWebhook(Events.MESSAGES_DELETE, {
             id: message.id,
             instanceId: message.instanceId,
@@ -4144,8 +4206,8 @@ export class BaileysStartupService extends ChannelStartupService {
               oldMessage.message.conversation = data.text;
             } else {
               oldMessage.message[oldMessage.messageType].caption = data.text;
-            }  
-            
+            }
+
             // A nova mensagem editada tem um ID diferente (messageSent.key.id)
             const newMessageKey = messageSent.key;
             const existingKey = typeof message?.key === 'object' && message.key !== null ? message.key : {};
@@ -4562,6 +4624,16 @@ export class BaileysStartupService extends ChannelStartupService {
     const contentType = getContentType(message.message);
     const contentMsg = message?.message[contentType] as any;
 
+    // Ensure messageTimestamp is always a number
+    let messageTimestamp: number;
+    if (typeof message.messageTimestamp === 'function') {
+      messageTimestamp = Number((message.messageTimestamp as any)());
+    } else if (Long.isLong(message.messageTimestamp)) {
+      messageTimestamp = message.messageTimestamp.toNumber();
+    } else {
+      messageTimestamp = Number(message.messageTimestamp) || 0;
+    }
+
     const messageRaw = {
       key: message.key,
       pushName:
@@ -4573,7 +4645,7 @@ export class BaileysStartupService extends ChannelStartupService {
       message: { ...message.message },
       contextInfo: contentMsg?.contextInfo,
       messageType: contentType || 'unknown',
-      messageTimestamp: message.messageTimestamp as number,
+      messageTimestamp: messageTimestamp,
       instanceId: this.instanceId,
       source: getDevice(message.key.id),
     };
@@ -4607,7 +4679,39 @@ export class BaileysStartupService extends ChannelStartupService {
       }
     }
 
-    return messageRaw;
+    // Sanitize the message to remove any functions or non-serializable objects
+    return this.sanitizeForPrisma(messageRaw);
+  }
+
+  private sanitizeForPrisma(obj: any): any {
+    if (obj === null || obj === undefined) {
+      return obj;
+    }
+
+    if (typeof obj === 'function') {
+      return undefined; // Remove functions
+    }
+
+    if (obj instanceof Date) {
+      return obj.toISOString();
+    }
+
+    if (Array.isArray(obj)) {
+      return obj.map(item => this.sanitizeForPrisma(item)).filter(item => item !== undefined);
+    }
+
+    if (typeof obj === 'object') {
+      const sanitized: any = {};
+      for (const [key, value] of Object.entries(obj)) {
+        const sanitizedValue = this.sanitizeForPrisma(value);
+        if (sanitizedValue !== undefined) {
+          sanitized[key] = sanitizedValue;
+        }
+      }
+      return sanitized;
+    }
+
+    return obj;
   }
 
   private async syncChatwootLostMessages() {
@@ -5051,7 +5155,7 @@ export class BaileysStartupService extends ChannelStartupService {
         quoted,
       });
       const id = await this.client.relayMessage(sender, message, { messageId });
-      m.key = { id: id, remoteJid: sender, participant: isJidUser(sender) ? sender : undefined, fromMe: true };
+      m.key = { id: id, remoteJid: sender, participant: isPnUser(sender) ? sender : undefined, fromMe: true };
       for (const [key, value] of Object.entries(m)) {
         if (!value || (isArray(value) && value.length) === 0) {
           delete m[key];
@@ -5186,13 +5290,13 @@ export class BaileysStartupService extends ChannelStartupService {
       );
     }
 
-      // Process the sent message for database storage and webhooks
-  if (messageSent) {
-    await this.processSentMessage(messageSent, isForward);
-  }
+    // Process the sent message for database storage and webhooks
+    if (messageSent) {
+      await this.processSentMessage(messageSent, isForward);
+    }
 
-  return messageSent;
-}
+    return messageSent;
+  }
 
   // Process sent message for database storage and webhooks
   private async processSentMessage(messageSent: WAMessage, isForward?: boolean) {
@@ -5343,7 +5447,6 @@ export class BaileysStartupService extends ChannelStartupService {
       undefined, // ephemeralExpiration
       true, // isForward
       {
-
         key: originalMessage.key as unknown as WAMessageKey,
         message: originalMessage.message,
       },
