@@ -4,7 +4,7 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-pnpmfileChecksum: sha256-nTDUvskj4T7I/00tT0kTyzI1t7kBhnfhHZnX9Q46yDQ=
+pnpmfileChecksum: sha256-OfnBmuB/UowmZPre55Dwv5pnhvPmqblFrg+NfJPNVWk=
 
 importers:
 
@@ -1881,7 +1881,7 @@ packages:
     resolution: {integrity: sha512-1Lx3WLFQWm3ooKDYZD1eXmoGO9fxYQjrycfHFC8P0sCfQVXyROp0p9PFWBehewBOdCwHc+f/b8I0fMto5eSfwA==}
 
   baileys@6.7.19:
-    resolution: {integrity: sha512-15ZZVZoN5CQl6UeTT+3CogIZm40G+E5LO9meVi4NhqxmYYiIGoh7iuq5UlHjmTvZIpFtMPCnz+EDmyEABy8oig==, tarball: https://registry.npmjs.org/baileys/-/baileys-6.7.19.tgz}
+    resolution: {integrity: sha512-15ZZVZoN5CQl6UeTT+3CogIZm40G+E5LO9meVi4NhqxmYYiIGoh7iuq5UlHjmTvZIpFtMPCnz+EDmyEABy8oig==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
       audio-decode: ^2.1.3

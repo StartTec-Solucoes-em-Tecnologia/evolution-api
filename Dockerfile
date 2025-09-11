@@ -12,10 +12,14 @@ LABEL contact="contato@evolution-api.com"
 
 WORKDIR /evolution
 
-COPY ./package.json ./pnpm-lock.yaml ./pnpm-workspace.yaml ./
+# Copy package files
+COPY ./package.json ./
+COPY ./pnpm-lock.yaml ./
+COPY ./pnpm-workspace.yaml ./
 COPY ./tsconfig.json ./
 COPY ./tsup.config.ts ./
 
+# Install dependencies with frozen lockfile for reproducible builds
 RUN pnpm install --frozen-lockfile
 
 COPY ./src ./src
