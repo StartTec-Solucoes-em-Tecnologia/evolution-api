@@ -112,7 +112,7 @@ import makeWASocket, {
   isJidBroadcast,
   isJidGroup,
   isJidNewsletter,
-  isPnUser,
+  isJidUser,
   makeCacheableSignalKeyStore,
   MessageUpsertType,
   MessageUserReceiptUpdate,
@@ -533,6 +533,113 @@ export class BaileysStartupService extends ChannelStartupService {
     }
   }
 
+  /**
+   * Função auxiliar para download de mídia com retry robusto
+   * Baseada no protótipo funcional que funcionava corretamente
+   */
+  private async downloadMediaWithRetry(msg: any, context: string = 'download'): Promise<Buffer | null> {
+    const RETRY_CONFIG = {
+      maxRetries: 3,
+      retryDelay: 2000, // 2 segundos
+      backoffMultiplier: 1.5
+    };
+
+    let lastError: any = null;
+    let downloadSuccess = false;
+    let buffer: Buffer | null = null;
+
+    // Primeira tentativa com downloadMediaMessage
+    for (let attempt = 1; attempt <= RETRY_CONFIG.maxRetries && !downloadSuccess; attempt++) {
+      try {
+        this.logger.info(`📸 [${context}] Tentativa ${attempt}/${RETRY_CONFIG.maxRetries} de download com downloadMediaMessage...`);
+        
+        buffer = await downloadMediaMessage(
+          { key: msg?.key, message: msg?.message },
+          'buffer',
+          {},
+          { logger: P({ level: 'error' }) as any, reuploadRequest: this.client.updateMediaMessage },
+        );
+
+        if (buffer && buffer.length > 0) {
+          downloadSuccess = true;
+          this.logger.info(`✅ [${context}] Download com downloadMediaMessage bem-sucedido na tentativa ${attempt}`);
+          break;
+        } else {
+          throw new Error('Buffer vazio recebido do downloadMediaMessage');
+        }
+      } catch (err) {
+        lastError = err;
+        this.logger.error(`❌ [${context}] Tentativa ${attempt} com downloadMediaMessage falhou: ${err?.message || err}`);
+        
+        // Se não é a última tentativa, aguarda antes de tentar novamente
+        if (attempt < RETRY_CONFIG.maxRetries) {
+          const delay = RETRY_CONFIG.retryDelay * Math.pow(RETRY_CONFIG.backoffMultiplier, attempt - 1);
+          this.logger.info(`⏳ [${context}] Aguardando ${delay}ms antes da próxima tentativa...`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
+    }
+
+    // Se downloadMediaMessage falhou, tenta com downloadContentFromMessage
+    if (!downloadSuccess) {
+      this.logger.info(`🔄 [${context}] Tentando fallback com downloadContentFromMessage...`);
+      
+      const mediaType = Object.keys(msg.message).find((key) => key.endsWith('Message'));
+      if (!mediaType) {
+        this.logger.error(`❌ [${context}] Could not determine mediaType for fallback`);
+        return null;
+      }
+
+      for (let attempt = 1; attempt <= RETRY_CONFIG.maxRetries && !downloadSuccess; attempt++) {
+        try {
+          this.logger.info(`📸 [${context}] Tentativa ${attempt}/${RETRY_CONFIG.maxRetries} de download com downloadContentFromMessage...`);
+          
+          const media = await downloadContentFromMessage(
+            {
+              mediaKey: msg.message?.[mediaType]?.mediaKey,
+              directPath: msg.message?.[mediaType]?.directPath,
+              url: `https://mmg.whatsapp.net${msg?.message?.[mediaType]?.directPath}`,
+            },
+            await this.mapMediaType(mediaType),
+            {},
+          );
+          
+          const chunks = [];
+          for await (const chunk of media) {
+            chunks.push(chunk);
+          }
+          buffer = Buffer.concat(chunks);
+          
+          if (buffer && buffer.length > 0) {
+            downloadSuccess = true;
+            this.logger.info(`✅ [${context}] Download com downloadContentFromMessage bem-sucedido na tentativa ${attempt}`);
+            break;
+          } else {
+            throw new Error('Buffer vazio recebido do downloadContentFromMessage');
+          }
+        } catch (err) {
+          lastError = err;
+          this.logger.error(`❌ [${context}] Tentativa ${attempt} com downloadContentFromMessage falhou: ${err?.message || err}`);
+          
+          // Se não é a última tentativa, aguarda antes de tentar novamente
+          if (attempt < RETRY_CONFIG.maxRetries) {
+            const delay = RETRY_CONFIG.retryDelay * Math.pow(RETRY_CONFIG.backoffMultiplier, attempt - 1);
+            this.logger.info(`⏳ [${context}] Aguardando ${delay}ms antes da próxima tentativa...`);
+            await new Promise((resolve) => setTimeout(resolve, delay));
+          }
+        }
+      }
+    }
+
+    // Se ambas as tentativas falharam
+    if (!downloadSuccess) {
+      this.logger.error(`❌ [${context}] Falha ao baixar mídia após ${RETRY_CONFIG.maxRetries * 2} tentativas totais. Último erro: ${lastError?.message || lastError}`);
+      return null;
+    }
+
+    return buffer;
+  }
+
   private async createClient(number?: string): Promise<WASocket> {
     this.instance.authState = await this.defineAuthState();
 
@@ -604,6 +711,14 @@ export class BaileysStartupService extends ChannelStartupService {
       }
     }
 
+    // O trecho abaixo está correto e não deve interferir no download das mídias,
+    // desde que as opções de proxy e agentes estejam corretamente configuradas
+    // e não estejam bloqueando o tráfego HTTP/S necessário para o download.
+    // O campo 'options' é propagado para o socket, e o download de mídia depende
+    // do agente/fetchAgent se o proxy estiver ativo.
+    // Se houver problemas no download de mídia, verifique a configuração do proxy
+    // e se o agente está permitindo conexões externas.
+
     const socketConfig: UserFacingSocketConfig = {
       ...options,
       version,
@@ -648,13 +763,11 @@ export class BaileysStartupService extends ChannelStartupService {
           message.deviceSentMessage?.message?.listMessage?.listType === proto.Message.ListMessage.ListType.PRODUCT_LIST
         ) {
           message = JSON.parse(JSON.stringify(message));
-
           message.deviceSentMessage.message.listMessage.listType = proto.Message.ListMessage.ListType.SINGLE_SELECT;
         }
 
         if (message.listMessage?.listType == proto.Message.ListMessage.ListType.PRODUCT_LIST) {
           message = JSON.parse(JSON.stringify(message));
-
           message.listMessage.listType = proto.Message.ListMessage.ListType.SINGLE_SELECT;
         }
 
@@ -988,8 +1101,8 @@ export class BaileysStartupService extends ChannelStartupService {
             continue;
           }
 
-          if (m.key.remoteJid?.includes('@lid') && m.key.remoteJidAlt) {
-            m.key.remoteJid = m.key.remoteJidAlt;
+          if (m.key.remoteJid?.includes('@lid') && m.key.senderPn) {
+            m.key.remoteJid = m.key.senderPn;
           }
 
           if (Long.isLong(m?.messageTimestamp)) {
@@ -1085,9 +1198,9 @@ export class BaileysStartupService extends ChannelStartupService {
     ) => {
       try {
         for (const received of messages) {
-          if (received.key.remoteJid?.includes('@lid') && received.key.remoteJidAlt) {
+          if (received.key.remoteJid?.includes('@lid') && received.key.senderPn) {
             (received.key as { previousRemoteJid?: string | null }).previousRemoteJid = received.key.remoteJid;
-            received.key.remoteJid = received.key.remoteJidAlt;
+            received.key.remoteJid = received.key.senderPn;
           }
           if (
             received?.messageStubParameters?.some?.((param) =>
@@ -1427,27 +1540,15 @@ export class BaileysStartupService extends ChannelStartupService {
           if (this.localWebhook.enabled) {
             if (isMedia && this.localWebhook.webhookBase64) {
               try {
-                const buffer = await downloadMediaMessage(
+                const buffer = await this.downloadMediaWithRetry(
                   { key: received.key, message: received?.message },
-                  'buffer',
-                  {},
-                  { logger: P({ level: 'error' }) as any, reuploadRequest: this.client.updateMediaMessage },
+                  'webhook-base64'
                 );
 
                 if (buffer) {
                   messageRaw.message.base64 = buffer.toString('base64');
                 } else {
-                  // retry to download media
-                  const buffer = await downloadMediaMessage(
-                    { key: received.key, message: received?.message },
-                    'buffer',
-                    {},
-                    { logger: P({ level: 'error' }) as any, reuploadRequest: this.client.updateMediaMessage },
-                  );
-
-                  if (buffer) {
-                    messageRaw.message.base64 = buffer.toString('base64');
-                  }
+                  this.logger.error('❌ Falha ao baixar mídia para webhook base64 após múltiplas tentativas');
                 }
               } catch (error) {
                 this.logger.error(['Error converting media to base64', error?.message]);
@@ -1530,8 +1631,8 @@ export class BaileysStartupService extends ChannelStartupService {
           continue;
         }
 
-        if (key.remoteJid?.includes('@lid') && key.remoteJidAlt) {
-          key.remoteJid = key.remoteJidAlt;
+        if (key.remoteJid?.includes('@lid') && key.senderPn) {
+          key.remoteJid = key.senderPn;
         }
 
         const updateKey = `${this.instance.id}_${key.id}_${update.status}`;
@@ -2047,7 +2148,7 @@ export class BaileysStartupService extends ChannelStartupService {
         quoted,
       });
       const id = await this.client.relayMessage(sender, message, { messageId });
-      m.key = { id: id, remoteJid: sender, participant: isPnUser(sender) ? sender : undefined, fromMe: true };
+      m.key = { id: id, remoteJid: sender, participant: isJidUser(sender) ? sender : undefined, fromMe: true };
       for (const [key, value] of Object.entries(m)) {
         if (!value || (isArray(value) && value.length) === 0) {
           delete m[key];
@@ -2350,27 +2451,15 @@ export class BaileysStartupService extends ChannelStartupService {
       if (this.localWebhook.enabled) {
         if (isMedia && this.localWebhook.webhookBase64) {
           try {
-            const buffer = await downloadMediaMessage(
+            const buffer = await this.downloadMediaWithRetry(
               { key: messageRaw.key, message: messageRaw?.message },
-              'buffer',
-              {},
-              { logger: P({ level: 'error' }) as any, reuploadRequest: this.client.updateMediaMessage },
+              'send-message-webhook'
             );
 
             if (buffer) {
               messageRaw.message.base64 = buffer.toString('base64');
             } else {
-              // retry to download media
-              const buffer = await downloadMediaMessage(
-                { key: messageRaw.key, message: messageRaw?.message },
-                'buffer',
-                {},
-                { logger: P({ level: 'error' }) as any, reuploadRequest: this.client.updateMediaMessage },
-              );
-
-              if (buffer) {
-                messageRaw.message.base64 = buffer.toString('base64');
-              }
+              this.logger.error('❌ Falha ao baixar mídia para webhook base64 após múltiplas tentativas');
             }
           } catch (error) {
             this.logger.error(['Error converting media to base64', error?.message]);
@@ -3548,7 +3637,7 @@ export class BaileysStartupService extends ChannelStartupService {
     try {
       const keys: proto.IMessageKey[] = [];
       data.readMessages.forEach((read) => {
-        if (isJidGroup(read.remoteJid) || isPnUser(read.remoteJid)) {
+        if (isJidGroup(read.remoteJid) || isJidUser(read.remoteJid)) {
           keys.push({ remoteJid: read.remoteJid, fromMe: read.fromMe, id: read.id });
         }
       });
@@ -3890,39 +3979,11 @@ export class BaileysStartupService extends ChannelStartupService {
 
       let buffer: Buffer;
 
-      try {
-        buffer = await downloadMediaMessage(
-          { key: msg?.key, message: msg?.message },
-          'buffer',
-          {},
-          { logger: P({ level: 'error' }) as any, reuploadRequest: this.client.updateMediaMessage },
-        );
-      } catch (err) {
-        this.logger.error('Download Media failed, trying to retry in 5 seconds...');
-        await new Promise((resolve) => setTimeout(resolve, 5000));
-        const mediaType = Object.keys(msg.message).find((key) => key.endsWith('Message'));
-        if (!mediaType) throw new Error('Could not determine mediaType for fallback');
-
-        try {
-          const media = await downloadContentFromMessage(
-            {
-              mediaKey: msg.message?.[mediaType]?.mediaKey,
-              directPath: msg.message?.[mediaType]?.directPath,
-              url: `https://mmg.whatsapp.net${msg?.message?.[mediaType]?.directPath}`,
-            },
-            await this.mapMediaType(mediaType),
-            {},
-          );
-          const chunks = [];
-          for await (const chunk of media) {
-            chunks.push(chunk);
-          }
-          buffer = Buffer.concat(chunks);
-          this.logger.info('Download Media with downloadContentFromMessage was successful!');
-        } catch (fallbackErr) {
-          this.logger.error('Download Media with downloadContentFromMessage also failed!');
-          throw fallbackErr;
-        }
+      // Usar a função auxiliar melhorada para download de mídia
+      buffer = await this.downloadMediaWithRetry(msg, 'media-download');
+      
+      if (!buffer) {
+        throw new Error('Download de mídia falhou após múltiplas tentativas');
       }
       const typeMessage = getContentType(msg.message);
 
@@ -5155,7 +5216,7 @@ export class BaileysStartupService extends ChannelStartupService {
         quoted,
       });
       const id = await this.client.relayMessage(sender, message, { messageId });
-      m.key = { id: id, remoteJid: sender, participant: isPnUser(sender) ? sender : undefined, fromMe: true };
+      m.key = { id: id, remoteJid: sender, participant: isJidUser(sender) ? sender : undefined, fromMe: true };
       for (const [key, value] of Object.entries(m)) {
         if (!value || (isArray(value) && value.length) === 0) {
           delete m[key];
@@ -5383,27 +5444,15 @@ export class BaileysStartupService extends ChannelStartupService {
     if (this.localWebhook.enabled) {
       if (isMedia && this.localWebhook.webhookBase64) {
         try {
-          const buffer = await downloadMediaMessage(
+          const buffer = await this.downloadMediaWithRetry(
             { key: messageRaw.key, message: messageRaw?.message },
-            'buffer',
-            {},
-            { logger: P({ level: 'error' }) as any, reuploadRequest: this.client.updateMediaMessage },
+            'forward-message-webhook'
           );
 
           if (buffer) {
             messageRaw.message.base64 = buffer.toString('base64');
           } else {
-            // retry to download media
-            const buffer = await downloadMediaMessage(
-              { key: messageRaw.key, message: messageRaw?.message },
-              'buffer',
-              {},
-              { logger: P({ level: 'error' }) as any, reuploadRequest: this.client.updateMediaMessage },
-            );
-
-            if (buffer) {
-              messageRaw.message.base64 = buffer.toString('base64');
-            }
+            this.logger.error('❌ Falha ao baixar mídia para webhook base64 após múltiplas tentativas');
           }
         } catch (error) {
           this.logger.error(['Error converting media to base64', error?.message]);

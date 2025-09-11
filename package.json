@@ -12,12 +12,15 @@
     "test": "tsx watch ./test/all.test.ts",
     "lint": "eslint --fix --ext .ts src",
     "lint:check": "eslint --ext .ts src",
-    "db:generate": "node runWithProvider.js \"npx prisma generate --schema ./prisma/DATABASE_PROVIDER-schema.prisma\"",
-    "db:deploy": "node runWithProvider.js \"rm -rf ./prisma/migrations && cp -r ./prisma/DATABASE_PROVIDER-migrations ./prisma/migrations && npx prisma migrate deploy --schema ./prisma/DATABASE_PROVIDER-schema.prisma\"",
-    "db:deploy:win": "node runWithProvider.js \"xcopy /E /I prisma\\DATABASE_PROVIDER-migrations prisma\\migrations && npx prisma migrate deploy --schema prisma\\DATABASE_PROVIDER-schema.prisma\"",
-    "db:studio": "node runWithProvider.js \"npx prisma studio --schema ./prisma/DATABASE_PROVIDER-schema.prisma\"",
-    "db:migrate:dev": "node runWithProvider.js \"rm -rf ./prisma/migrations && cp -r ./prisma/DATABASE_PROVIDER-migrations ./prisma/migrations && npx prisma migrate dev --schema ./prisma/DATABASE_PROVIDER-schema.prisma && cp -r ./prisma/migrations/* ./prisma/DATABASE_PROVIDER-migrations\"",
-    "db:migrate:dev:win": "node runWithProvider.js \"xcopy /E /I prisma\\DATABASE_PROVIDER-migrations prisma\\migrations && npx prisma migrate dev --schema prisma\\DATABASE_PROVIDER-schema.prisma\""
+    "db:generate": "node runWithProvider.js \"pnpm exec prisma generate --schema ./prisma/DATABASE_PROVIDER-schema.prisma\"",
+    "db:deploy": "node runWithProvider.js \"rm -rf ./prisma/migrations && cp -r ./prisma/DATABASE_PROVIDER-migrations ./prisma/migrations && pnpm exec prisma migrate deploy --schema ./prisma/DATABASE_PROVIDER-schema.prisma\"",
+    "db:deploy:win": "node runWithProvider.js \"xcopy /E /I prisma\\DATABASE_PROVIDER-migrations prisma\\migrations && pnpm exec prisma migrate deploy --schema prisma\\DATABASE_PROVIDER-schema.prisma\"",
+    "db:studio": "node runWithProvider.js \"pnpm exec prisma studio --schema ./prisma/DATABASE_PROVIDER-schema.prisma\"",
+    "db:migrate:dev": "node runWithProvider.js \"rm -rf ./prisma/migrations && cp -r ./prisma/DATABASE_PROVIDER-migrations ./prisma/migrations && pnpm exec prisma migrate dev --schema ./prisma/DATABASE_PROVIDER-schema.prisma && cp -r ./prisma/migrations/* ./prisma/DATABASE_PROVIDER-migrations\"",
+    "db:migrate:dev:win": "node runWithProvider.js \"xcopy /E /I prisma\\DATABASE_PROVIDER-migrations prisma\\migrations && pnpm exec prisma migrate dev --schema prisma\\DATABASE_PROVIDER-schema.prisma\"",
+    "install:clean": "pnpm install --frozen-lockfile",
+    "install:dev": "pnpm install",
+    "clean": "pnpm store prune && rm -rf node_modules && pnpm install"
   },
   "repository": {
     "type": "git",
@@ -60,7 +63,7 @@
     "amqplib": "^0.10.5",
     "audio-decode": "^2.2.3",
     "axios": "^1.7.9",
-    "baileys": "github:WhiskeySockets/Baileys#v7.0.0-rc.2",
+    "baileys": "6.7.19",
     "class-validator": "^0.14.1",
     "compression": "^1.7.5",
     "cors": "^2.8.5",
@@ -102,7 +105,8 @@
     "socket.io-client": "^4.8.1",
     "socks-proxy-agent": "^8.0.5",
     "swagger-ui-express": "^5.0.1",
-    "tsup": "^8.3.5"
+    "tsup": "^8.3.5",
+    "uuid": "^13.0.0"
   },
   "devDependencies": {
     "@types/compression": "^1.7.5",
@@ -127,5 +131,9 @@
     "tsconfig-paths": "^4.2.0",
     "tsx": "^4.20.3",
     "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=8.0.0"
   }
 }

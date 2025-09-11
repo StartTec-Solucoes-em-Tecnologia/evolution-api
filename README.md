@@ -106,6 +106,78 @@ We are proud to collaborate with the following content creators who have contrib
 - [MKT Seven Automações](https://www.youtube.com/@sevenautomacoes)
 - [Vamos automatizar](https://www.youtube.com/vamosautomatizar)
 
+## Development Setup
+
+This project uses **pnpm** as the package manager for better performance and disk space efficiency.
+
+### Prerequisites
+
+- Node.js >= 18.0.0
+- pnpm >= 8.0.0
+
+### Installation
+
+1. **Install pnpm globally** (if not already installed):
+   ```bash
+   npm install -g pnpm
+   ```
+
+2. **Clone the repository**:
+   ```bash
+   git clone https://github.com/EvolutionAPI/evolution-api.git
+   cd evolution-api
+   ```
+
+3. **Install dependencies**:
+   ```bash
+   pnpm install
+   ```
+
+4. **Set up environment variables**:
+   ```bash
+   cp .env.example .env
+   # Edit .env with your configuration
+   ```
+
+5. **Generate Prisma client**:
+   ```bash
+   pnpm run db:generate
+   ```
+
+6. **Run database migrations**:
+   ```bash
+   pnpm run db:deploy
+   ```
+
+### Development Commands
+
+- **Start development server**: `pnpm run dev:server`
+- **Build project**: `pnpm run build`
+- **Start production**: `pnpm run start:prod`
+- **Run linting**: `pnpm run lint`
+- **Clean install**: `pnpm run clean`
+
+### Docker Development
+
+The Dockerfile has been optimized for pnpm:
+
+```bash
+# Build with pnpm
+docker build -t evolution-api .
+
+# Run with pnpm
+docker run -p 8080:8080 evolution-api
+```
+
+### Package Manager Benefits
+
+Using pnpm provides several advantages:
+
+- **Faster installs**: Up to 2x faster than npm
+- **Disk space efficient**: Shared dependency storage
+- **Strict dependency resolution**: Better security and reliability
+- **Monorepo support**: Built-in workspace management
+
 ## License
 
 Evolution API is licensed under the Apache License 2.0, with the following additional conditions:
