@@ -73,7 +73,7 @@ export class ReadChatDto {
   remoteJid: string;
 }
 
-export class ForwardMessagesDto { 
+export class ForwardMessagesDto {
   keys: Key[];
   numbers: string[];
 }

@@ -74,7 +74,7 @@ export class ChatRouter extends RouterBroker {
 
         return res.status(HttpStatus.CREATED).json(response);
       })
-        .post(this.routerPath('markChatAsRead'), ...guards, async (req, res) => {
+      .post(this.routerPath('markChatAsRead'), ...guards, async (req, res) => {
         const response = await this.dataValidate<ReadChatDto>({
           request: req,
           schema: readChatSchema,

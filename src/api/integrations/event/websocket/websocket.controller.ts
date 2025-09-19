@@ -36,7 +36,7 @@ export class WebsocketController extends EventController implements EventControl
 
           // Permite conexões internas do Socket.IO (EIO=4 é o Engine.IO v4)
           // if (params.has('EIO') && isLocalhost) {
-          if (params.has('EIO') ) {
+          if (params.has('EIO')) {
             return callback(null, true);
           }
 

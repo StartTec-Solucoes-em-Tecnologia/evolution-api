@@ -9,7 +9,7 @@ import { TypebotService } from '@api/integrations/chatbot/typebot/services/typeb
 import { PrismaRepository, Query } from '@api/repository/repository.service';
 import { eventManager, waMonitor } from '@api/server.module';
 import { Events, wa } from '@api/types/wa.types';
-import { Auth, Chatwoot, ConfigService, HttpServer } from '@config/env.config';
+import { Auth, Chatwoot, ConfigService, HttpServer, Proxy } from '@config/env.config';
 import { Logger } from '@config/logger.config';
 import { NotFoundException } from '@exceptions';
 import { Contact, Message, Prisma } from '@prisma/client';
@@ -364,13 +364,14 @@ export class ChannelStartupService {
   public async loadProxy() {
     this.localProxy.enabled = false;
 
-    if (process.env.PROXY_HOST) {
+    const proxyConfig = this.configService.get<Proxy>('PROXY');
+    if (proxyConfig.HOST) {
       this.localProxy.enabled = true;
-      this.localProxy.host = process.env.PROXY_HOST;
-      this.localProxy.port = process.env.PROXY_PORT || '80';
-      this.localProxy.protocol = process.env.PROXY_PROTOCOL || 'http';
-      this.localProxy.username = process.env.PROXY_USERNAME;
-      this.localProxy.password = process.env.PROXY_PASSWORD;
+      this.localProxy.host = proxyConfig.HOST;
+      this.localProxy.port = proxyConfig.PORT || '80';
+      this.localProxy.protocol = proxyConfig.PROTOCOL || 'http';
+      this.localProxy.username = proxyConfig.USERNAME;
+      this.localProxy.password = proxyConfig.PASSWORD;
     }
 
     const data = await this.prismaRepository.proxy.findUnique({
@@ -430,7 +431,7 @@ export class ChannelStartupService {
     return data;
   }
 
-  public async sendDataWebhook<T = any>(event: Events, data: T, local = true, integration?: string[]) {
+  public async sendDataWebhook<T extends object = any>(event: Events, data: T, local = true, integration?: string[]) {
     const serverUrl = this.configService.get<HttpServer>('SERVER').URL;
     const tzoffset = new Date().getTimezoneOffset() * 60000; //offset in milliseconds
     const localISOTime = new Date(Date.now() - tzoffset).toISOString();
@@ -780,62 +781,64 @@ export class ChannelStartupService {
     `;
 
     if (results && isArray(results) && results.length > 0) {
-      const lastMessageIds = results.map(r => r.lastMessageId).filter(Boolean);
+      const lastMessageIds = results.map((r) => r.lastMessageId).filter(Boolean);
 
-const updates = await this.prismaRepository.messageUpdate.findMany({
-  where: { messageId: { in: lastMessageIds } },
-  select: {
-    messageId: true,
-    status: true,
-  },
-});
+      const updates = await this.prismaRepository.messageUpdate.findMany({
+        where: { messageId: { in: lastMessageIds } },
+        select: {
+          messageId: true,
+          status: true,
+        },
+      });
 
-const updatesByMessage = updates.reduce((acc, upd) => {
-  if (!acc[upd.messageId]) acc[upd.messageId] = [];
-  acc[upd.messageId].push({
-    status: upd.status,
-  });
-  return acc;
-}, {} as Record<string, {status: string}[]>);
+      const updatesByMessage = updates.reduce(
+        (acc, upd) => {
+          if (!acc[upd.messageId]) acc[upd.messageId] = [];
+          acc[upd.messageId].push({
+            status: upd.status,
+          });
+          return acc;
+        },
+        {} as Record<string, { status: string }[]>,
+      );
 
-console.log(updatesByMessage);
+      console.log(updatesByMessage);
 
-const mappedResults = results.map((contact) => {
-  const lastMessage = contact.lastMessageId
-    ? {
-        id: contact.lastMessageId,
-        key: contact.lastMessage_key,
-        pushName: contact.lastMessagePushName,
-        participant: contact.lastMessageParticipant,
-        messageType: contact.lastMessageMessageType,
-        message: contact.lastMessageMessage,
-        contextInfo: contact.lastMessageContextInfo,
-        source: contact.lastMessageSource,
-        messageTimestamp: contact.lastMessageMessageTimestamp,
-        instanceId: contact.lastMessageInstanceId,
-        sessionId: contact.lastMessageSessionId,
-        status: contact.lastMessageStatus,
-        MessageUpdate: updatesByMessage[contact.lastMessageId] || [],
-      }
-    : undefined;
+      const mappedResults = results.map((contact) => {
+        const lastMessage = contact.lastMessageId
+          ? {
+              id: contact.lastMessageId,
+              key: contact.lastMessage_key,
+              pushName: contact.lastMessagePushName,
+              participant: contact.lastMessageParticipant,
+              messageType: contact.lastMessageMessageType,
+              message: contact.lastMessageMessage,
+              contextInfo: contact.lastMessageContextInfo,
+              source: contact.lastMessageSource,
+              messageTimestamp: contact.lastMessageMessageTimestamp,
+              instanceId: contact.lastMessageInstanceId,
+              sessionId: contact.lastMessageSessionId,
+              status: contact.lastMessageStatus,
+              MessageUpdate: updatesByMessage[contact.lastMessageId] || [],
+            }
+          : undefined;
 
-  return {
-    id: contact.contactId || null,
-    remoteJid: contact.remoteJid,
-    pushName: contact.pushName,
-    profilePicUrl: contact.profilePicUrl,
-    updatedAt: contact.updatedAt,
-    windowStart: contact.windowStart,
-    windowExpires: contact.windowExpires,
-    windowActive: contact.windowActive,
-    lastMessage: lastMessage ? this.cleanMessageData(lastMessage) : undefined,
-    unreadCount: contact.unreadMessages,
-    isSaved: !!contact.contactId,
-  };
-});
+        return {
+          id: contact.contactId || null,
+          remoteJid: contact.remoteJid,
+          pushName: contact.pushName,
+          profilePicUrl: contact.profilePicUrl,
+          updatedAt: contact.updatedAt,
+          windowStart: contact.windowStart,
+          windowExpires: contact.windowExpires,
+          windowActive: contact.windowActive,
+          lastMessage: lastMessage ? this.cleanMessageData(lastMessage) : undefined,
+          unreadCount: contact.unreadMessages,
+          isSaved: !!contact.contactId,
+        };
+      });
 
-    
-return mappedResults;
+      return mappedResults;
     }
 
     return [];

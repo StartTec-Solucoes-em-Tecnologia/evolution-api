@@ -9,11 +9,11 @@ import {
   ProfileNameDto,
   ProfilePictureDto,
   ProfileStatusDto,
+  type ReadChatDto,
   ReadMessageDto,
   SendPresenceDto,
   UpdateMessageDto,
   WhatsAppNumberDto,
-  type ReadChatDto,
 } from '@api/dto/chat.dto';
 import { InstanceDto } from '@api/dto/instance.dto';
 import { Query } from '@api/repository/repository.service';
@@ -30,7 +30,7 @@ export class ChatController {
   public async readMessage({ instanceName }: InstanceDto, data: ReadMessageDto) {
     return await this.waMonitor.waInstances[instanceName].markMessageAsRead(data);
   }
-   public async readChat({ instanceName }: InstanceDto, data: ReadChatDto) {
+  public async readChat({ instanceName }: InstanceDto, data: ReadChatDto) {
     return await this.waMonitor.waInstances[instanceName].markChatAsRead(data);
   }
 
