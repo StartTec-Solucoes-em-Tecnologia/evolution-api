@@ -1,3 +1,4 @@
+import type { ForwardMessagesDto } from '@api/dto/chat.dto';
 import { InstanceDto } from '@api/dto/instance.dto';
 import {
   MediaMessage,
@@ -531,6 +532,9 @@ export class EvolutionStartupService extends ChannelStartupService {
       throw new BadRequestException(error.toString());
     }
   }
+  public async forwardMessages({ instanceName }: InstanceDto, data: ForwardMessagesDto) {
+    throw new BadRequestException('Not implemented');
+  }
 
   public async textMessage(data: SendTextDto, isIntegration = false) {
     const res = await this.sendMessageWithTyping(
@@ -776,6 +780,9 @@ export class EvolutionStartupService extends ChannelStartupService {
   }
   public async markMessageAsRead() {
     throw new BadRequestException('Method not available on Evolution Channel');
+  }
+  public async markChatAsRead() {
+    throw new BadRequestException('Method not available on WhatsApp Business API');
   }
   public async archiveChat() {
     throw new BadRequestException('Method not available on Evolution Channel');

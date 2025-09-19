@@ -781,6 +781,29 @@ export class ChannelStartupService {
     `;
 
     if (results && isArray(results) && results.length > 0) {
+      const lastMessageIds = results.map((r) => r.lastMessageId).filter(Boolean);
+
+      const updates = await this.prismaRepository.messageUpdate.findMany({
+        where: { messageId: { in: lastMessageIds } },
+        select: {
+          messageId: true,
+          status: true,
+        },
+      });
+
+      const updatesByMessage = updates.reduce(
+        (acc, upd) => {
+          if (!acc[upd.messageId]) acc[upd.messageId] = [];
+          acc[upd.messageId].push({
+            status: upd.status,
+          });
+          return acc;
+        },
+        {} as Record<string, { status: string }[]>,
+      );
+
+      console.log(updatesByMessage);
+
       const mappedResults = results.map((contact) => {
         const lastMessage = contact.lastMessageId
           ? {
@@ -796,6 +819,7 @@ export class ChannelStartupService {
               instanceId: contact.lastMessageInstanceId,
               sessionId: contact.lastMessageSessionId,
               status: contact.lastMessageStatus,
+              MessageUpdate: updatesByMessage[contact.lastMessageId] || [],
             }
           : undefined;
 

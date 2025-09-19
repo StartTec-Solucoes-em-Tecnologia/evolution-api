@@ -1,0 +1,9 @@
+packages:
+  - '.'
+
+ignoredBuiltDependencies:
+  - baileys
+
+# pnpm workspace configuration
+prefer-workspace-packages: true
+link-workspace-packages: true

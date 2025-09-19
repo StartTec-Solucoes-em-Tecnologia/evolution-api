@@ -62,6 +62,16 @@ export const readMessageSchema: JSONSchema7 = {
   },
   required: ['readMessages'],
 };
+export const readChatSchema: JSONSchema7 = {
+  $id: v4(),
+  type: 'object',
+  properties: {
+    remoteJid: {
+      type: 'string',
+    },
+  },
+  required: ['remoteJid'],
+};
 
 export const archiveChatSchema: JSONSchema7 = {
   $id: v4(),
@@ -129,6 +139,31 @@ export const deleteMessageSchema: JSONSchema7 = {
   },
   required: ['id', 'fromMe', 'remoteJid'],
   ...isNotEmpty('id', 'remoteJid', 'participant'),
+};
+
+export const deleteMultipleMessagesSchema: JSONSchema7 = {
+  $id: v4(),
+  type: 'object',
+  properties: {
+    messages: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 100, // Limite de 100 mensagens por vez
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          fromMe: { type: 'boolean', enum: [true, false] },
+          remoteJid: { type: 'string' },
+          participant: { type: 'string' },
+        },
+        required: ['id', 'fromMe', 'remoteJid'],
+        ...isNotEmpty('id', 'remoteJid', 'participant'),
+      },
+    },
+  },
+  required: ['messages'],
+  ...isNotEmpty('messages'),
 };
 
 export const profilePictureSchema: JSONSchema7 = {

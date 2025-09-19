@@ -4,12 +4,14 @@ import {
   ArchiveChatDto,
   BlockUserDto,
   DeleteMessage,
+  type ForwardMessagesDto,
   getBase64FromMediaMessageDto,
   LastMessage,
   MarkChatUnreadDto,
   NumberBusiness,
   OnWhatsAppDto,
   PrivacySettingDto,
+  type ReadChatDto,
   ReadMessageDto,
   SendPresenceDto,
   UpdateMessageDto,
@@ -549,6 +551,125 @@ export class BaileysStartupService extends ChannelStartupService {
     }
   }
 
+  /**
+   * Função auxiliar para download de mídia com retry robusto
+   * Baseada no protótipo funcional que funcionava corretamente
+   */
+  private async downloadMediaWithRetry(msg: any, context: string = 'download'): Promise<Buffer | null> {
+    const RETRY_CONFIG = {
+      maxRetries: 3,
+      retryDelay: 2000, // 2 segundos
+      backoffMultiplier: 1.5,
+    };
+
+    let lastError: any = null;
+    let downloadSuccess = false;
+    let buffer: Buffer | null = null;
+
+    // Primeira tentativa com downloadMediaMessage
+    for (let attempt = 1; attempt <= RETRY_CONFIG.maxRetries && !downloadSuccess; attempt++) {
+      try {
+        this.logger.info(
+          `📸 [${context}] Tentativa ${attempt}/${RETRY_CONFIG.maxRetries} de download com downloadMediaMessage...`,
+        );
+
+        buffer = await downloadMediaMessage(
+          { key: msg?.key, message: msg?.message },
+          'buffer',
+          {},
+          { logger: P({ level: 'error' }) as any, reuploadRequest: this.client.updateMediaMessage },
+        );
+
+        if (buffer && buffer.length > 0) {
+          downloadSuccess = true;
+          this.logger.info(`✅ [${context}] Download com downloadMediaMessage bem-sucedido na tentativa ${attempt}`);
+          break;
+        } else {
+          throw new Error('Buffer vazio recebido do downloadMediaMessage');
+        }
+      } catch (err) {
+        lastError = err;
+        this.logger.error(
+          `❌ [${context}] Tentativa ${attempt} com downloadMediaMessage falhou: ${err?.message || err}`,
+        );
+
+        // Se não é a última tentativa, aguarda antes de tentar novamente
+        if (attempt < RETRY_CONFIG.maxRetries) {
+          const delay = RETRY_CONFIG.retryDelay * Math.pow(RETRY_CONFIG.backoffMultiplier, attempt - 1);
+          this.logger.info(`⏳ [${context}] Aguardando ${delay}ms antes da próxima tentativa...`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
+    }
+
+    // Se downloadMediaMessage falhou, tenta com downloadContentFromMessage
+    if (!downloadSuccess) {
+      this.logger.info(`🔄 [${context}] Tentando fallback com downloadContentFromMessage...`);
+
+      const mediaType = Object.keys(msg.message).find((key) => key.endsWith('Message'));
+      if (!mediaType) {
+        this.logger.error(`❌ [${context}] Could not determine mediaType for fallback`);
+        return null;
+      }
+
+      for (let attempt = 1; attempt <= RETRY_CONFIG.maxRetries && !downloadSuccess; attempt++) {
+        try {
+          this.logger.info(
+            `📸 [${context}] Tentativa ${attempt}/${RETRY_CONFIG.maxRetries} de download com downloadContentFromMessage...`,
+          );
+
+          const media = await downloadContentFromMessage(
+            {
+              mediaKey: msg.message?.[mediaType]?.mediaKey,
+              directPath: msg.message?.[mediaType]?.directPath,
+              url: `https://mmg.whatsapp.net${msg?.message?.[mediaType]?.directPath}`,
+            },
+            await this.mapMediaType(mediaType),
+            {},
+          );
+
+          const chunks = [];
+          for await (const chunk of media) {
+            chunks.push(chunk);
+          }
+          buffer = Buffer.concat(chunks);
+
+          if (buffer && buffer.length > 0) {
+            downloadSuccess = true;
+            this.logger.info(
+              `✅ [${context}] Download com downloadContentFromMessage bem-sucedido na tentativa ${attempt}`,
+            );
+            break;
+          } else {
+            throw new Error('Buffer vazio recebido do downloadContentFromMessage');
+          }
+        } catch (err) {
+          lastError = err;
+          this.logger.error(
+            `❌ [${context}] Tentativa ${attempt} com downloadContentFromMessage falhou: ${err?.message || err}`,
+          );
+
+          // Se não é a última tentativa, aguarda antes de tentar novamente
+          if (attempt < RETRY_CONFIG.maxRetries) {
+            const delay = RETRY_CONFIG.retryDelay * Math.pow(RETRY_CONFIG.backoffMultiplier, attempt - 1);
+            this.logger.info(`⏳ [${context}] Aguardando ${delay}ms antes da próxima tentativa...`);
+            await new Promise((resolve) => setTimeout(resolve, delay));
+          }
+        }
+      }
+    }
+
+    // Se ambas as tentativas falharam
+    if (!downloadSuccess) {
+      this.logger.error(
+        `❌ [${context}] Falha ao baixar mídia após ${RETRY_CONFIG.maxRetries * 2} tentativas totais. Último erro: ${lastError?.message || lastError}`,
+      );
+      return null;
+    }
+
+    return buffer;
+  }
+
   private async createClient(number?: string): Promise<WASocket> {
     this.instance.authState = await this.defineAuthState();
 
@@ -620,6 +741,14 @@ export class BaileysStartupService extends ChannelStartupService {
       }
     }
 
+    // O trecho abaixo está correto e não deve interferir no download das mídias,
+    // desde que as opções de proxy e agentes estejam corretamente configuradas
+    // e não estejam bloqueando o tráfego HTTP/S necessário para o download.
+    // O campo 'options' é propagado para o socket, e o download de mídia depende
+    // do agente/fetchAgent se o proxy estiver ativo.
+    // Se houver problemas no download de mídia, verifique a configuração do proxy
+    // e se o agente está permitindo conexões externas.
+
     const socketConfig: UserFacingSocketConfig = {
       ...options,
       version,
@@ -664,13 +793,11 @@ export class BaileysStartupService extends ChannelStartupService {
           message.deviceSentMessage?.message?.listMessage?.listType === proto.Message.ListMessage.ListType.PRODUCT_LIST
         ) {
           message = JSON.parse(JSON.stringify(message));
-
           message.deviceSentMessage.message.listMessage.listType = proto.Message.ListMessage.ListType.SINGLE_SELECT;
         }
 
         if (message.listMessage?.listType == proto.Message.ListMessage.ListType.PRODUCT_LIST) {
           message = JSON.parse(JSON.stringify(message));
-
           message.listMessage.listType = proto.Message.ListMessage.ListType.SINGLE_SELECT;
         }
 
@@ -949,8 +1076,11 @@ export class BaileysStartupService extends ChannelStartupService {
         const contactsMap = new Map();
 
         for (const contact of contacts) {
-          if (contact.id && (contact.notify || contact.name)) {
-            contactsMap.set(contact.id, { name: contact.name ?? contact.notify, jid: contact.id });
+          if (contact.id && (contact.notify || contact.name || contact.verifiedName)) {
+            contactsMap.set(contact.id, {
+              name: contact.name ?? contact.notify ?? contact.verifiedName,
+              jid: contact.id,
+            });
           }
         }
 
@@ -966,7 +1096,7 @@ export class BaileysStartupService extends ChannelStartupService {
             continue;
           }
 
-          chatsRaw.push({ remoteJid: chat.id, instanceId: this.instanceId, name: chat.name });
+          chatsRaw.push({ remoteJid: chat.id, instanceId: this.instanceId, name: chat.name ?? chat.name });
         }
 
         this.sendDataWebhook(Events.CHATS_SET, chatsRaw);
@@ -977,17 +1107,18 @@ export class BaileysStartupService extends ChannelStartupService {
 
         const messagesRaw: any[] = [];
 
+        // Create a more robust duplicate detection using key.id + instanceId combination
         const messagesRepository: Set<string> = new Set(
           chatwootImport.getRepositoryMessagesCache(instance) ??
             (
               await this.prismaRepository.message.findMany({
-                select: { key: true },
+                select: { key: true, instanceId: true },
                 where: { instanceId: this.instanceId },
               })
             ).map((message) => {
               const key = message.key as { id: string };
-
-              return key.id;
+              // Create a unique identifier combining key.id and instanceId
+              return `${key.id}_${message.instanceId}`;
             }),
         );
 
@@ -1014,7 +1145,9 @@ export class BaileysStartupService extends ChannelStartupService {
             }
           }
 
-          if (messagesRepository?.has(m.key.id)) {
+          // Check for duplicates using the same unique identifier format
+          const messageUniqueId = `${m.key.id}_${this.instanceId}`;
+          if (messagesRepository?.has(messageUniqueId)) {
             continue;
           }
 
@@ -1027,13 +1160,44 @@ export class BaileysStartupService extends ChannelStartupService {
             }
           }
 
-          messagesRaw.push(this.prepareMessage(m));
+          const preparedMessage = this.prepareMessage(m);
+          messagesRaw.push(preparedMessage);
+
+          // Add to cache to prevent duplicates within the same batch
+          messagesRepository.add(messageUniqueId);
         }
 
         this.sendDataWebhook(Events.MESSAGES_SET, [...messagesRaw]);
 
         if (this.configService.get<Database>('DATABASE').SAVE_DATA.HISTORIC) {
-          await this.prismaRepository.message.createMany({ data: messagesRaw, skipDuplicates: true });
+          // Process messages in batches to avoid serialization errors
+          const BATCH_SIZE = 500; // Smaller batch size for history messages
+
+          for (let i = 0; i < messagesRaw.length; i += BATCH_SIZE) {
+            const batch = messagesRaw.slice(i, i + BATCH_SIZE);
+
+            try {
+              await this.prismaRepository.message.createMany({
+                data: batch,
+                skipDuplicates: true,
+              });
+            } catch (error) {
+              this.logger.error(`Error inserting message batch ${i}-${i + batch.length}: ${error.message}`);
+
+              // If batch fails, try inserting one by one to identify problematic messages
+              for (const message of batch) {
+                try {
+                  await this.prismaRepository.message.create({
+                    data: message,
+                  });
+                } catch (singleError) {
+                  this.logger.error(
+                    `Error inserting single message: ${singleError.message} - MessageId: ${message.key?.id}, Timestamp: ${message.messageTimestamp}`,
+                  );
+                }
+              }
+            }
+          }
         }
 
         if (
@@ -1106,7 +1270,66 @@ export class BaileysStartupService extends ChannelStartupService {
           const editedMessage =
             received?.message?.protocolMessage || received?.message?.editedMessage?.message?.protocolMessage;
 
-          if (editedMessage) {
+          // Verificar se é realmente uma edição e não uma deleção
+          // Mensagens deletadas vêm com message: null
+          const isMessageDelete =
+            received?.message === null ||
+            (editedMessage &&
+              (editedMessage.type === 0 || // REVOKE type
+                !editedMessage.editedMessage)); // Sem conteúdo editado = deleção
+
+          const isActualEdit =
+            editedMessage &&
+            !isMessageDelete &&
+            (editedMessage.editedMessage || // Tem conteúdo editado
+              editedMessage.type === 14 || // MESSAGE_EDIT type
+              received?.message?.editedMessage); // Estrutura de mensagem editada
+
+          // Debug log para entender o tipo de protocolMessage
+          if (editedMessage || received?.message === null) {
+            this.logger.log(
+              `ProtocolMessage detected - Type: ${editedMessage?.type}, HasEditedMessage: ${!!editedMessage?.editedMessage}, MessageIsNull: ${received?.message === null}, IsEdit: ${isActualEdit}, IsDelete: ${isMessageDelete}`,
+            );
+          }
+
+          // Processar deleção via protocolMessage (quando não é tratado em messages.update)
+          if (isMessageDelete && (editedMessage || received?.message === null)) {
+            const deleteKey = editedMessage?.key || received?.key;
+
+            if (deleteKey) {
+              this.sendDataWebhook(Events.MESSAGES_DELETE, deleteKey);
+
+              const oldMessage = await this.getMessage(deleteKey, true);
+              if ((oldMessage as any)?.id) {
+                const existingKey =
+                  typeof (oldMessage as any)?.key === 'object' && (oldMessage as any).key !== null
+                    ? (oldMessage as any).key
+                    : {};
+                await this.prismaRepository.message.update({
+                  where: { id: (oldMessage as any).id },
+                  data: {
+                    key: { ...existingKey, deleted: true },
+                    status: 'DELETED',
+                  },
+                });
+
+                if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE) {
+                  await this.prismaRepository.messageUpdate.create({
+                    data: {
+                      fromMe: deleteKey.fromMe,
+                      keyId: deleteKey.id,
+                      remoteJid: deleteKey.remoteJid,
+                      status: 'DELETED',
+                      instanceId: this.instanceId,
+                      messageId: (oldMessage as any).id,
+                    },
+                  });
+                }
+              }
+            }
+          }
+
+          if (editedMessage && isActualEdit && !isMessageDelete) {
             if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled)
               this.chatwootService.eventWhatsapp(
                 'messages.edit',
@@ -1117,16 +1340,30 @@ export class BaileysStartupService extends ChannelStartupService {
             await this.sendDataWebhook(Events.MESSAGES_EDITED, editedMessage);
             const oldMessage = await this.getMessage(editedMessage.key, true);
             if ((oldMessage as any)?.id) {
-              const editedMessageTimestamp = Long.isLong(editedMessage?.timestampMs)
-                ? Math.floor(editedMessage.timestampMs.toNumber() / 1000)
-                : Math.floor((editedMessage.timestampMs as number) / 1000);
+              // A nova mensagem editada tem um ID diferente (received.key.id)
+              const newMessageKey = received.key;
+              const existingKey =
+                typeof (oldMessage as any)?.key === 'object' && (oldMessage as any).key !== null
+                  ? (oldMessage as any).key
+                  : {};
 
+              // Manter o timestamp original da mensagem, não usar o timestamp da edição
               await this.prismaRepository.message.update({
                 where: { id: (oldMessage as any).id },
                 data: {
                   message: editedMessage.editedMessage as any,
-                  messageTimestamp: editedMessageTimestamp,
+                  // messageTimestamp não é atualizado - mantém o timestamp original
                   status: 'EDITED',
+                  // Adicionar referência para a nova mensagem editada na key
+                  key: {
+                    ...existingKey,
+                    editedMessageKey: {
+                      id: newMessageKey.id,
+                      remoteJid: newMessageKey.remoteJid,
+                      fromMe: newMessageKey.fromMe,
+                      participant: newMessageKey.participant,
+                    },
+                  },
                 },
               });
               await this.prismaRepository.messageUpdate.create({
@@ -1246,6 +1483,19 @@ export class BaileysStartupService extends ChannelStartupService {
           }
 
           if (this.configService.get<Database>('DATABASE').SAVE_DATA.NEW_MESSAGE) {
+            // Check if message already exists to prevent duplicates
+            const existingMessage = await this.prismaRepository.message.findFirst({
+              where: {
+                instanceId: this.instanceId,
+                key: { path: ['id'], equals: received.key.id },
+              },
+            });
+
+            if (existingMessage) {
+              this.logger.debug(`Message already exists, skipping duplicate: ${received.key.id}`);
+              continue;
+            }
+
             const msg = await this.prismaRepository.message.create({ data: messageRaw });
 
             const { remoteJid } = received.key;
@@ -1330,27 +1580,15 @@ export class BaileysStartupService extends ChannelStartupService {
           if (this.localWebhook.enabled) {
             if (isMedia && this.localWebhook.webhookBase64) {
               try {
-                const buffer = await downloadMediaMessage(
+                const buffer = await this.downloadMediaWithRetry(
                   { key: received.key, message: received?.message },
-                  'buffer',
-                  {},
-                  { logger: P({ level: 'error' }) as any, reuploadRequest: this.client.updateMediaMessage },
+                  'webhook-base64',
                 );
 
                 if (buffer) {
                   messageRaw.message.base64 = buffer.toString('base64');
                 } else {
-                  // retry to download media
-                  const buffer = await downloadMediaMessage(
-                    { key: received.key, message: received?.message },
-                    'buffer',
-                    {},
-                    { logger: P({ level: 'error' }) as any, reuploadRequest: this.client.updateMediaMessage },
-                  );
-
-                  if (buffer) {
-                    messageRaw.message.base64 = buffer.toString('base64');
-                  }
+                  this.logger.error('❌ Falha ao baixar mídia para webhook base64 após múltiplas tentativas');
                 }
               } catch (error) {
                 this.logger.error(['Error converting media to base64', error?.message]);
@@ -1364,7 +1602,7 @@ export class BaileysStartupService extends ChannelStartupService {
 
           this.logger.log(messageRaw);
 
-          this.sendDataWebhook(Events.MESSAGES_UPSERT, messageRaw);
+          this.sendDataWebhook(Events.MESSAGES_UPSERT, { ...messageRaw, type });
 
           await chatbotController.emit({
             instance: { instanceName: this.instance.name, instanceId: this.instanceId },
@@ -1481,7 +1719,7 @@ export class BaileysStartupService extends ChannelStartupService {
             remoteJid: key?.remoteJid,
             fromMe: key.fromMe,
             participant: key?.remoteJid,
-            status: status[update.status] ?? 'DELETED',
+            status: status[update.status] ?? (update.message === null ? 'DELETED' : 'EDITED'),
             pollUpdates,
             instanceId: this.instanceId,
           };
@@ -1503,6 +1741,19 @@ export class BaileysStartupService extends ChannelStartupService {
 
           if (update.message === null && update.status === undefined) {
             this.sendDataWebhook(Events.MESSAGES_DELETE, key);
+
+            // Marcar a mensagem como deletada ao invés de apagar do banco
+            if (findMessage) {
+              const existingKey =
+                typeof findMessage?.key === 'object' && findMessage.key !== null ? findMessage.key : {};
+              await this.prismaRepository.message.update({
+                where: { id: findMessage.id },
+                data: {
+                  key: { ...existingKey, deleted: true },
+                  status: 'DELETED',
+                },
+              });
+            }
 
             if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE)
               await this.prismaRepository.messageUpdate.create({ data: message });
@@ -1550,7 +1801,8 @@ export class BaileysStartupService extends ChannelStartupService {
 
           this.sendDataWebhook(Events.MESSAGES_UPDATE, message);
 
-          if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE)
+          // Só criar MessageUpdate se o status for válido (não UNKNOWN)
+          if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE && message.status !== 'UNKNOWN')
             await this.prismaRepository.messageUpdate.create({ data: message });
 
           const existingChat = await this.prismaRepository.chat.findFirst({
@@ -2254,27 +2506,15 @@ export class BaileysStartupService extends ChannelStartupService {
       if (this.localWebhook.enabled) {
         if (isMedia && this.localWebhook.webhookBase64) {
           try {
-            const buffer = await downloadMediaMessage(
+            const buffer = await this.downloadMediaWithRetry(
               { key: messageRaw.key, message: messageRaw?.message },
-              'buffer',
-              {},
-              { logger: P({ level: 'error' }) as any, reuploadRequest: this.client.updateMediaMessage },
+              'send-message-webhook',
             );
 
             if (buffer) {
               messageRaw.message.base64 = buffer.toString('base64');
             } else {
-              // retry to download media
-              const buffer = await downloadMediaMessage(
-                { key: messageRaw.key, message: messageRaw?.message },
-                'buffer',
-                {},
-                { logger: P({ level: 'error' }) as any, reuploadRequest: this.client.updateMediaMessage },
-              );
-
-              if (buffer) {
-                messageRaw.message.base64 = buffer.toString('base64');
-              }
+              this.logger.error('❌ Falha ao baixar mídia para webhook base64 após múltiplas tentativas');
             }
           } catch (error) {
             this.logger.error(['Error converting media to base64', error?.message]);
@@ -2388,6 +2628,50 @@ export class BaileysStartupService extends ChannelStartupService {
       },
       isIntegration,
     );
+  }
+
+  public async forwardMessages(data: ForwardMessagesDto) {
+    console.log({ forwardData: data });
+    if (!data.keys || data.keys.length === 0) {
+      throw new BadRequestException('At least one message key is required');
+    }
+
+    const messages = await Promise.all(
+      data.keys.map(async (key) => {
+        return await this.getMessage(key, true);
+      }),
+    );
+
+    if (!messages || messages.length === 0) {
+      throw new BadRequestException('Messages not found');
+    }
+
+    const waNumbers = await this.whatsappNumber({ numbers: data.numbers });
+    const validNumbers = waNumbers.filter((wa) => wa.exists);
+
+    if (validNumbers.length === 0) {
+      throw new BadRequestException('No valid WhatsApp numbers found');
+    }
+
+    for (const message of messages) {
+      try {
+        // Ensure the message has the proper structure for forwarding
+        const messageToForward = this.ensureMessageStructureForForward(message);
+
+        // Log message type for debugging
+        const messageType = this.getMessageType(messageToForward);
+        this.logger.log(`Forwarding message type: ${messageType}`);
+
+        await this.forwardMessageToMultiple(
+          validNumbers.map((wa) => wa.jid),
+          messageToForward as WAMessage,
+        );
+        this.logger.log(`Message forwarded to ${validNumbers.map((wa) => wa.jid).join(', ')}`);
+      } catch (e) {
+        this.logger.error(e);
+        throw new BadRequestException(e.toString());
+      }
+    }
   }
 
   public async pollMessage(data: SendPollDto) {
@@ -3421,9 +3705,89 @@ export class BaileysStartupService extends ChannelStartupService {
         }
       });
       await this.client.readMessages(keys);
+
+      // Process in batches to avoid "too many bind variables" error
+      const BATCH_SIZE = 1000; // Conservative batch size to stay well under 32767 limit
+      const allMessageIds: string[] = [];
+
+      for (let i = 0; i < keys.length; i += BATCH_SIZE) {
+        const batch = keys.slice(i, i + BATCH_SIZE);
+
+        const messages = await this.prismaRepository.message.findMany({
+          where: {
+            instanceId: this.instanceId,
+            OR: batch.map((k) => ({
+              AND: [
+                { key: { path: ['remoteJid'], equals: k.remoteJid } },
+                { key: { path: ['fromMe'], equals: k.fromMe } },
+                { key: { path: ['id'], equals: k.id } },
+                { status: { notIn: ['READ', 'PLAYED'] } },
+              ],
+            })),
+          },
+        });
+
+        const batchMessageIds = messages.map((msg) => msg.id).filter((id) => !!id);
+        allMessageIds.push(...batchMessageIds);
+      }
+
+      // Fixes issue where all messages are marked as read when messageIds is empty
+      if (allMessageIds.length) {
+        // Process message updates in batches as well
+        for (let i = 0; i < allMessageIds.length; i += BATCH_SIZE) {
+          const batchMessageIds = allMessageIds.slice(i, i + BATCH_SIZE);
+
+          await this.prismaRepository.message.updateMany({
+            where: {
+              id: { in: batchMessageIds },
+            },
+            data: { status: 'READ' },
+          });
+        }
+      }
+
       return { message: 'Read messages', read: 'success' };
     } catch (error) {
       throw new InternalServerErrorException('Read messages fail', error.toString());
+    }
+  }
+
+  public async markChatAsRead(data: ReadChatDto) {
+    try {
+      const messages = await this.prismaRepository.message.findMany({
+        where: {
+          instanceId: this.instanceId,
+
+          AND: [{ key: { path: ['remoteJid'], equals: data.remoteJid } }, { key: { path: ['fromMe'], equals: false } }],
+          status: { notIn: ['READ', 'PLAYED'] },
+        },
+        orderBy: { messageTimestamp: 'asc' },
+      });
+      const messagesKeys = messages.map((msg) => {
+        const key = msg.key as proto.IMessageKey;
+        return { fromMe: key.fromMe, id: key.id, remoteJid: key.remoteJid };
+      });
+
+      this.markMessageAsRead({
+        readMessages: messagesKeys,
+      });
+
+      const findChat = await this.prismaRepository.chat.findFirst({
+        where: { remoteJid: data.remoteJid, instanceId: this.instanceId },
+      });
+
+      if (findChat)
+        await this.prismaRepository.chat.update({
+          where: { id: findChat.id },
+          data: { unreadMessages: 0 },
+        });
+
+      return { chatId: messagesKeys, markedChatAsRead: true, messages };
+    } catch (error) {
+      throw new InternalServerErrorException({
+        markedChatAsRead: false,
+        message: ['An error occurred while marking as read the chat. Open a calling.', error.toString()],
+      });
     }
   }
 
@@ -3513,32 +3877,29 @@ export class BaileysStartupService extends ChannelStartupService {
       if (response) {
         const messageId = response.message?.protocolMessage?.key?.id;
         if (messageId) {
-          const isLogicalDeleted = configService.get<Database>('DATABASE').DELETE_DATA.LOGICAL_MESSAGE_DELETE;
           let message = await this.prismaRepository.message.findFirst({
             where: { key: { path: ['id'], equals: messageId } },
           });
-          if (isLogicalDeleted) {
-            if (!message) return response;
-            const existingKey = typeof message?.key === 'object' && message.key !== null ? message.key : {};
-            message = await this.prismaRepository.message.update({
-              where: { id: message.id },
-              data: { key: { ...existingKey, deleted: true }, status: 'DELETED' },
-            });
-            if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE) {
-              const messageUpdate: any = {
-                messageId: message.id,
-                keyId: messageId,
-                remoteJid: response.key.remoteJid,
-                fromMe: response.key.fromMe,
-                participant: response.key?.remoteJid,
-                status: 'DELETED',
-                instanceId: this.instanceId,
-              };
-              await this.prismaRepository.messageUpdate.create({ data: messageUpdate });
-            }
-          } else {
-            if (!message) return response;
-            await this.prismaRepository.message.deleteMany({ where: { id: message.id } });
+          if (!message) return response;
+
+          // Sempre marcar como deletada ao invés de apagar do banco
+          const existingKey = typeof message?.key === 'object' && message.key !== null ? message.key : {};
+          message = await this.prismaRepository.message.update({
+            where: { id: message.id },
+            data: { key: { ...existingKey, deleted: true }, status: 'DELETED' },
+          });
+
+          if (this.configService.get<Database>('DATABASE').SAVE_DATA.MESSAGE_UPDATE) {
+            const messageUpdate: any = {
+              messageId: message.id,
+              keyId: messageId,
+              remoteJid: response.key.remoteJid,
+              fromMe: response.key.fromMe,
+              participant: response.key?.remoteJid,
+              status: 'DELETED',
+              instanceId: this.instanceId,
+            };
+            await this.prismaRepository.messageUpdate.create({ data: messageUpdate });
           }
           this.sendDataWebhook(Events.MESSAGES_DELETE, {
             id: message.id,
@@ -3559,6 +3920,54 @@ export class BaileysStartupService extends ChannelStartupService {
     } catch (error) {
       throw new InternalServerErrorException('Error while deleting message for everyone', error?.toString());
     }
+  }
+
+  public async deleteMultipleMessages(data: { messages: DeleteMessage[] }) {
+    const results = [];
+    const errors = [];
+
+    for (const [index, message] of data.messages.entries()) {
+      try {
+        this.logger.log(`Deleting message ${index + 1}/${data.messages.length}: ${message.id}`);
+
+        const result = await this.deleteMessage(message);
+        results.push({
+          messageId: message.id,
+          success: true,
+          result: result,
+        });
+
+        // Pequeno delay entre deletações para evitar rate limiting
+        if (index < data.messages.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      } catch (error) {
+        this.logger.error(`Error deleting message ${message.id}: ${error}`);
+        errors.push({
+          messageId: message.id,
+          success: false,
+          error: error.message || error.toString(),
+        });
+      }
+    }
+
+    const summary = {
+      total: data.messages.length,
+      successful: results.length,
+      failed: errors.length,
+      results: results,
+      errors: errors,
+    };
+
+    this.logger.log(`Bulk delete completed: ${summary.successful}/${summary.total} successful`);
+
+    if (errors.length > 0) {
+      this.sendDataWebhook(Events.MESSAGES_DELETE, { ...summary, type: 'BULK_DELETE_PARTIAL' });
+    } else {
+      this.sendDataWebhook(Events.MESSAGES_DELETE, { ...summary, type: 'BULK_DELETE_SUCCESS' });
+    }
+
+    return summary;
   }
 
   public async mapMediaType(mediaType) {
@@ -3631,41 +4040,11 @@ export class BaileysStartupService extends ChannelStartupService {
         msg.message[mediaType].mediaKey = Uint8Array.from(Object.values(mediaMessage['mediaKey']));
       }
 
-      let buffer: Buffer;
+      // Usar a função auxiliar melhorada para download de mídia
+      const buffer = await this.downloadMediaWithRetry(msg, 'media-download');
 
-      try {
-        buffer = await downloadMediaMessage(
-          { key: msg?.key, message: msg?.message },
-          'buffer',
-          {},
-          { logger: P({ level: 'error' }) as any, reuploadRequest: this.client.updateMediaMessage },
-        );
-      } catch (err) {
-        this.logger.error('Download Media failed, trying to retry in 5 seconds...');
-        await new Promise((resolve) => setTimeout(resolve, 5000));
-        const mediaType = Object.keys(msg.message).find((key) => key.endsWith('Message'));
-        if (!mediaType) throw new Error('Could not determine mediaType for fallback');
-
-        try {
-          const media = await downloadContentFromMessage(
-            {
-              mediaKey: msg.message?.[mediaType]?.mediaKey,
-              directPath: msg.message?.[mediaType]?.directPath,
-              url: `https://mmg.whatsapp.net${msg?.message?.[mediaType]?.directPath}`,
-            },
-            await this.mapMediaType(mediaType),
-            {},
-          );
-          const chunks = [];
-          for await (const chunk of media) {
-            chunks.push(chunk);
-          }
-          buffer = Buffer.concat(chunks);
-          this.logger.info('Download Media with downloadContentFromMessage was successful!');
-        } catch (fallbackErr) {
-          this.logger.error('Download Media with downloadContentFromMessage also failed!');
-          throw fallbackErr;
-        }
+      if (!buffer) {
+        throw new Error('Download de mídia falhou após múltiplas tentativas');
       }
       const typeMessage = getContentType(msg.message);
 
@@ -3950,12 +4329,27 @@ export class BaileysStartupService extends ChannelStartupService {
             } else {
               oldMessage.message[oldMessage.messageType].caption = data.text;
             }
+
+            // A nova mensagem editada tem um ID diferente (messageSent.key.id)
+            const newMessageKey = messageSent.key;
+            const existingKey = typeof message?.key === 'object' && message.key !== null ? message.key : {};
+
             message = await this.prismaRepository.message.update({
               where: { id: message.id },
               data: {
                 message: oldMessage.message,
                 status: 'EDITED',
-                messageTimestamp: Math.floor(Date.now() / 1000), // Convert to int32 by dividing by 1000 to get seconds
+                // messageTimestamp não é atualizado - mantém o timestamp original
+                // Adicionar referência para a nova mensagem editada na key
+                key: {
+                  ...existingKey,
+                  editedMessageKey: {
+                    id: newMessageKey.id,
+                    remoteJid: newMessageKey.remoteJid,
+                    fromMe: newMessageKey.fromMe,
+                    participant: newMessageKey.participant,
+                  },
+                },
               },
             });
 
@@ -4378,6 +4772,16 @@ export class BaileysStartupService extends ChannelStartupService {
     const contentType = getContentType(message.message);
     const contentMsg = message?.message[contentType] as any;
 
+    // Ensure messageTimestamp is always a number
+    let messageTimestamp: number;
+    if (typeof message.messageTimestamp === 'function') {
+      messageTimestamp = Number((message.messageTimestamp as any)());
+    } else if (Long.isLong(message.messageTimestamp)) {
+      messageTimestamp = message.messageTimestamp.toNumber();
+    } else {
+      messageTimestamp = Number(message.messageTimestamp) || 0;
+    }
+
     const messageRaw = {
       key: message.key, // Save key exactly as it comes from Baileys
       pushName:
@@ -4425,7 +4829,39 @@ export class BaileysStartupService extends ChannelStartupService {
       }
     }
 
-    return messageRaw;
+    // Sanitize the message to remove any functions or non-serializable objects
+    return this.sanitizeForPrisma(messageRaw);
+  }
+
+  private sanitizeForPrisma(obj: any): any {
+    if (obj === null || obj === undefined) {
+      return obj;
+    }
+
+    if (typeof obj === 'function') {
+      return undefined; // Remove functions
+    }
+
+    if (obj instanceof Date) {
+      return obj.toISOString();
+    }
+
+    if (Array.isArray(obj)) {
+      return obj.map((item) => this.sanitizeForPrisma(item)).filter((item) => item !== undefined);
+    }
+
+    if (typeof obj === 'object') {
+      const sanitized: any = {};
+      for (const [key, value] of Object.entries(obj)) {
+        const sanitizedValue = this.sanitizeForPrisma(value);
+        if (sanitizedValue !== undefined) {
+          sanitized[key] = sanitizedValue;
+        }
+      }
+      return sanitized;
+    }
+
+    return obj;
   }
 
   private async syncChatwootLostMessages() {
@@ -4814,6 +5250,7 @@ export class BaileysStartupService extends ChannelStartupService {
         instanceId: true,
         source: true,
         contextInfo: true,
+        status: true,
         MessageUpdate: { select: { status: true } },
       },
     });
@@ -4845,5 +5282,486 @@ export class BaileysStartupService extends ChannelStartupService {
         records: formattedMessages,
       },
     };
+  }
+
+  private async sendMessageOnlyForwarded(
+    sender: string,
+    message: any,
+    mentions: any,
+    linkPreview: any,
+    quoted: any,
+    messageId?: string,
+    ephemeralExpiration?: number,
+    isForward?: boolean,
+    forwardingInfo?: {
+      key: WAMessageKey;
+      message: any;
+    },
+    // participants?: GroupParticipant[],
+  ) {
+    sender = sender.toLowerCase();
+
+    const option: any = { quoted };
+
+    if (isJidGroup(sender)) {
+      option.useCachedGroupMetadata = true;
+      // if (participants)
+      //   option.cachedGroupMetadata = async () => {
+      //     return { participants: participants as GroupParticipant[] };
+      //   };
+    }
+
+    if (ephemeralExpiration) option.ephemeralExpiration = ephemeralExpiration;
+
+    if (messageId) option.messageId = messageId;
+    else option.messageId = '3EB0' + randomBytes(18).toString('hex').toUpperCase();
+
+    // Handle view once messages
+    if (message['viewOnceMessage']) {
+      const m = generateWAMessageFromContent(sender, message, {
+        timestamp: new Date(),
+        userJid: this.instance.wuid,
+        messageId,
+        quoted,
+      });
+      const id = await this.client.relayMessage(sender, message, { messageId });
+      m.key = { id: id, remoteJid: sender, participant: isPnUser(sender) ? sender : undefined, fromMe: true };
+      for (const [key, value] of Object.entries(m)) {
+        if (!value || (isArray(value) && value.length) === 0) {
+          delete m[key];
+        }
+      }
+      return m;
+    }
+
+    let messageSent: WAMessage;
+
+    // Handle forwarding
+    if (isForward && forwardingInfo) {
+      messageSent = await this.client.sendMessage(
+        sender,
+        {
+          forward: {
+            key: forwardingInfo.key,
+            message: forwardingInfo.message,
+          },
+          mentions,
+        } as unknown as AnyMessageContent,
+        option as unknown as MiscMessageGenerationOptions,
+      );
+    }
+    // Handle reaction messages
+    else if (
+      !message['audio'] &&
+      !message['poll'] &&
+      !message['sticker'] &&
+      !message['conversation'] &&
+      sender !== 'status@broadcast'
+    ) {
+      if (message['reactionMessage']) {
+        messageSent = await this.client.sendMessage(
+          sender,
+          {
+            react: { text: message['reactionMessage']['text'], key: message['reactionMessage']['key'] },
+          } as unknown as AnyMessageContent,
+          option as unknown as MiscMessageGenerationOptions,
+        );
+      }
+    }
+    // Handle conversation messages
+    else if (message['conversation']) {
+      messageSent = await this.client.sendMessage(
+        sender,
+        { text: message['conversation'], mentions, linkPreview: linkPreview } as unknown as AnyMessageContent,
+        option as unknown as MiscMessageGenerationOptions,
+      );
+    }
+    // Handle general forwarding for all message types (including media)
+    else if (sender != 'status@broadcast' && isForward) {
+      // If it's a forward but no specific forwarding info, use the message itself
+      messageSent = await this.client.sendMessage(
+        sender,
+        {
+          forward: {
+            key: { remoteJid: this.instance.wuid, fromMe: true, id: option.messageId },
+            message,
+          },
+          mentions,
+        } as unknown as AnyMessageContent,
+        option as unknown as MiscMessageGenerationOptions,
+      );
+    }
+    // Handle status broadcast
+    else if (sender === 'status@broadcast') {
+      let jidList;
+      if (message['status'].option.allContacts) {
+        const contacts = await this.prismaRepository.contact.findMany({
+          where: { instanceId: this.instanceId, remoteJid: { not: { endsWith: '@g.us' } } },
+        });
+
+        jidList = contacts.map((contact) => contact.remoteJid);
+      } else {
+        jidList = message['status'].option.statusJidList;
+      }
+
+      const batchSize = 10;
+
+      const batches = Array.from({ length: Math.ceil(jidList.length / batchSize) }, (_, i) =>
+        jidList.slice(i * batchSize, i * batchSize + batchSize),
+      );
+
+      let msgId: string | null = null;
+
+      let firstMessage: WAMessage;
+
+      const firstBatch = batches.shift();
+
+      if (firstBatch) {
+        firstMessage = await this.client.sendMessage(
+          sender,
+          message['status'].content as unknown as AnyMessageContent,
+          {
+            backgroundColor: message['status'].option.backgroundColor,
+            font: message['status'].option.font,
+            statusJidList: firstBatch,
+          } as unknown as MiscMessageGenerationOptions,
+        );
+
+        msgId = firstMessage.key.id;
+      }
+
+      if (batches.length === 0) return firstMessage;
+
+      await Promise.allSettled(
+        batches.map(async (batch) => {
+          const messageSent = await this.client.sendMessage(
+            sender,
+            message['status'].content as unknown as AnyMessageContent,
+            {
+              backgroundColor: message['status'].option.backgroundColor,
+              font: message['status'].option.font,
+              statusJidList: batch,
+              messageId: msgId,
+            } as unknown as MiscMessageGenerationOptions,
+          );
+
+          return messageSent;
+        }),
+      );
+
+      return firstMessage;
+    }
+    // Default message sending
+    else {
+      messageSent = await this.client.sendMessage(
+        sender,
+        message as unknown as AnyMessageContent,
+        option as unknown as MiscMessageGenerationOptions,
+      );
+    }
+
+    // Process the sent message for database storage and webhooks
+    if (messageSent) {
+      await this.processSentMessage(messageSent, isForward);
+    }
+
+    return messageSent;
+  }
+
+  // Process sent message for database storage and webhooks
+  private async processSentMessage(messageSent: WAMessage, isForward?: boolean) {
+    if (Long.isLong(messageSent?.messageTimestamp)) {
+      messageSent.messageTimestamp = messageSent.messageTimestamp?.toNumber();
+    }
+
+    const messageRaw = this.prepareMessage(messageSent);
+
+    const isMedia =
+      messageSent?.message?.imageMessage ||
+      messageSent?.message?.videoMessage ||
+      messageSent?.message?.stickerMessage ||
+      messageSent?.message?.ptvMessage ||
+      messageSent?.message?.documentMessage ||
+      messageSent?.message?.documentWithCaptionMessage ||
+      messageSent?.message?.ptvMessage ||
+      messageSent?.message?.audioMessage;
+
+    if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled && !isForward) {
+      this.chatwootService.eventWhatsapp(
+        Events.SEND_MESSAGE,
+        { instanceName: this.instance.name, instanceId: this.instanceId },
+        messageRaw,
+      );
+    }
+
+    if (this.configService.get<Openai>('OPENAI').ENABLED && messageRaw?.message?.audioMessage) {
+      const openAiDefaultSettings = await this.prismaRepository.openaiSetting.findFirst({
+        where: { instanceId: this.instanceId },
+        include: { OpenaiCreds: true },
+      });
+
+      if (openAiDefaultSettings && openAiDefaultSettings.openaiCredsId && openAiDefaultSettings.speechToText) {
+        messageRaw.message.speechToText = `[audio] ${await this.openaiService.speechToText(messageRaw, this)}`;
+      }
+    }
+
+    if (this.configService.get<Database>('DATABASE').SAVE_DATA.NEW_MESSAGE) {
+      const msg = await this.prismaRepository.message.create({ data: messageRaw });
+
+      if (isMedia && this.configService.get<S3>('S3').ENABLE) {
+        try {
+          const message: any = messageRaw;
+
+          // Verificação adicional para garantir que há conteúdo de mídia real
+          const hasRealMedia = this.hasValidMediaContent(message);
+
+          if (!hasRealMedia) {
+            this.logger.warn('Message detected as media but contains no valid media content');
+          } else {
+            const media = await this.getBase64FromMediaMessage({ message }, true);
+
+            const { buffer, mediaType, fileName, size } = media;
+
+            const mimetype = mimeTypes.lookup(fileName).toString();
+
+            const fullName = join(
+              `${this.instance.id}`,
+              messageRaw.key.remoteJid,
+              `${messageRaw.key.id}`,
+              mediaType,
+              fileName,
+            );
+
+            await s3Service.uploadFile(fullName, buffer, size.fileLength?.low, { 'Content-Type': mimetype });
+
+            await this.prismaRepository.media.create({
+              data: { messageId: msg.id, instanceId: this.instanceId, type: mediaType, fileName: fullName, mimetype },
+            });
+
+            const mediaUrl = await s3Service.getObjectUrl(fullName);
+
+            messageRaw.message.mediaUrl = mediaUrl;
+
+            await this.prismaRepository.message.update({ where: { id: msg.id }, data: messageRaw });
+          }
+        } catch (error) {
+          this.logger.error(['Error on upload file to minio', error?.message, error?.stack]);
+        }
+      }
+    }
+
+    if (this.localWebhook.enabled) {
+      if (isMedia && this.localWebhook.webhookBase64) {
+        try {
+          const buffer = await this.downloadMediaWithRetry(
+            { key: messageRaw.key, message: messageRaw?.message },
+            'forward-message-webhook',
+          );
+
+          if (buffer) {
+            messageRaw.message.base64 = buffer.toString('base64');
+          } else {
+            this.logger.error('❌ Falha ao baixar mídia para webhook base64 após múltiplas tentativas');
+          }
+        } catch (error) {
+          this.logger.error(['Error converting media to base64', error?.message]);
+        }
+      }
+    }
+
+    this.logger.log(messageRaw);
+
+    this.sendDataWebhook(Events.SEND_MESSAGE, messageRaw);
+
+    if (this.configService.get<Chatwoot>('CHATWOOT').ENABLED && this.localChatwoot?.enabled && isForward) {
+      await chatbotController.emit({
+        instance: { instanceName: this.instance.name, instanceId: this.instanceId },
+        remoteJid: messageRaw.key.remoteJid,
+        msg: messageRaw,
+        pushName: messageRaw.pushName,
+        isIntegration: isForward,
+      });
+    }
+  }
+
+  // Helper method to forward a message
+  public async forwardMessage(
+    targetJid: string,
+    originalMessage: WAMessage,
+    mentions?: string[],
+    quoted?: any,
+  ): Promise<WAMessage> {
+    if (!originalMessage.key || !originalMessage.message) {
+      throw new Error('Invalid message to forward');
+    }
+
+    return await this.sendMessageOnlyForwarded(
+      targetJid,
+      originalMessage.message,
+      mentions,
+      null, // linkPreview
+      quoted,
+      undefined, // messageId - will be auto-generated
+      undefined, // ephemeralExpiration
+      true, // isForward
+      {
+        key: originalMessage.key as unknown as WAMessageKey,
+        message: originalMessage.message,
+      },
+    );
+  }
+
+  // Helper method to forward message to multiple recipients
+  public async forwardMessageToMultiple(
+    targetJids: string[],
+    originalMessage: WAMessage,
+    mentions?: string[],
+  ): Promise<WAMessage[]> {
+    const promises = targetJids.map((jid) => this.forwardMessage(jid, originalMessage, mentions));
+
+    return await Promise.all(promises);
+  }
+
+  // Helper method to ensure message has proper structure for forwarding
+  private ensureMessageStructureForForward(message: any): any {
+    if (!message || !message.message) {
+      return message;
+    }
+
+    const messageToForward = { ...message };
+    const messageContent = { ...message.message };
+
+    // Restore media URLs and data for different message types
+    if (messageContent.imageMessage) {
+      // Ensure image message has necessary data for forward
+      if (message.mediaUrl) {
+        messageContent.imageMessage.url = message.mediaUrl;
+      }
+      if (message.message?.base64) {
+        messageContent.imageMessage.base64 = message.message.base64;
+      }
+      // Ensure other required fields are present
+      if (!messageContent.imageMessage.mimetype) {
+        messageContent.imageMessage.mimetype = 'image/jpeg';
+      }
+    }
+
+    if (messageContent.videoMessage) {
+      // Ensure video message has necessary data for forward
+      if (message.mediaUrl) {
+        messageContent.videoMessage.url = message.mediaUrl;
+      }
+      if (message.message?.base64) {
+        messageContent.videoMessage.base64 = message.message.base64;
+      }
+      // Ensure other required fields are present
+      if (!messageContent.videoMessage.mimetype) {
+        messageContent.videoMessage.mimetype = 'video/mp4';
+      }
+    }
+
+    if (messageContent.audioMessage) {
+      // Ensure audio message has necessary data for forward
+      if (message.mediaUrl) {
+        messageContent.audioMessage.url = message.mediaUrl;
+      }
+      if (message.message?.base64) {
+        messageContent.audioMessage.base64 = message.message.base64;
+      }
+      // Ensure other required fields are present
+      if (!messageContent.audioMessage.mimetype) {
+        messageContent.audioMessage.mimetype = 'audio/ogg; codecs=opus';
+      }
+    }
+
+    if (messageContent.documentMessage) {
+      // Ensure document message has necessary data for forward
+      if (message.mediaUrl) {
+        messageContent.documentMessage.url = message.mediaUrl;
+      }
+      if (message.message?.base64) {
+        messageContent.documentMessage.base64 = message.message.base64;
+      }
+      // Ensure other required fields are present
+      if (!messageContent.documentMessage.mimetype) {
+        messageContent.documentMessage.mimetype = 'application/octet-stream';
+      }
+    }
+
+    if (messageContent.stickerMessage) {
+      // Ensure sticker message has necessary data for forward
+      if (message.mediaUrl) {
+        messageContent.stickerMessage.url = message.mediaUrl;
+      }
+      if (message.message?.base64) {
+        messageContent.stickerMessage.base64 = message.message.base64;
+      }
+      // Ensure other required fields are present
+      if (!messageContent.stickerMessage.mimetype) {
+        messageContent.stickerMessage.mimetype = 'image/webp';
+      }
+    }
+
+    // Handle view once messages
+    if (messageContent.viewOnceMessage) {
+      // Ensure view once message has proper structure
+      if (messageContent.viewOnceMessage.message) {
+        const innerMessage = messageContent.viewOnceMessage.message;
+        if (innerMessage.imageMessage && message.mediaUrl) {
+          innerMessage.imageMessage.url = message.mediaUrl;
+        }
+        if (innerMessage.videoMessage && message.mediaUrl) {
+          innerMessage.videoMessage.url = message.mediaUrl;
+        }
+      }
+    }
+
+    messageToForward.message = messageContent;
+    return messageToForward;
+  }
+
+  // Helper method to get message type
+  private getMessageType(message: any): string {
+    if (!message || !message.message) {
+      return 'unknown';
+    }
+
+    const messageContent = message.message;
+
+    if (messageContent.conversation) {
+      return 'conversation';
+    }
+    if (messageContent.imageMessage) {
+      return 'imageMessage';
+    }
+    if (messageContent.videoMessage) {
+      return 'videoMessage';
+    }
+    if (messageContent.audioMessage) {
+      return 'audioMessage';
+    }
+    if (messageContent.documentMessage) {
+      return 'documentMessage';
+    }
+    if (messageContent.stickerMessage) {
+      return 'stickerMessage';
+    }
+    if (messageContent.contactMessage) {
+      return 'contactMessage';
+    }
+    if (messageContent.locationMessage) {
+      return 'locationMessage';
+    }
+    if (messageContent.viewOnceMessage) {
+      return 'viewOnceMessage';
+    }
+    if (messageContent.reactionMessage) {
+      return 'reactionMessage';
+    }
+    if (messageContent.pollCreationMessage) {
+      return 'pollCreationMessage';
+    }
+
+    return 'unknown';
   }
 }

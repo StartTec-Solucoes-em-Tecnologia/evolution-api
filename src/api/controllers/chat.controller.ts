@@ -9,6 +9,7 @@ import {
   ProfileNameDto,
   ProfilePictureDto,
   ProfileStatusDto,
+  type ReadChatDto,
   ReadMessageDto,
   SendPresenceDto,
   UpdateMessageDto,
@@ -29,6 +30,9 @@ export class ChatController {
   public async readMessage({ instanceName }: InstanceDto, data: ReadMessageDto) {
     return await this.waMonitor.waInstances[instanceName].markMessageAsRead(data);
   }
+  public async readChat({ instanceName }: InstanceDto, data: ReadChatDto) {
+    return await this.waMonitor.waInstances[instanceName].markChatAsRead(data);
+  }
 
   public async archiveChat({ instanceName }: InstanceDto, data: ArchiveChatDto) {
     return await this.waMonitor.waInstances[instanceName].archiveChat(data);
@@ -40,6 +44,10 @@ export class ChatController {
 
   public async deleteMessage({ instanceName }: InstanceDto, data: DeleteMessage) {
     return await this.waMonitor.waInstances[instanceName].deleteMessage(data);
+  }
+
+  public async deleteMultipleMessages({ instanceName }: InstanceDto, data: { messages: DeleteMessage[] }) {
+    return await this.waMonitor.waInstances[instanceName].deleteMultipleMessages(data);
   }
 
   public async fetchProfilePicture({ instanceName }: InstanceDto, data: NumberDto) {

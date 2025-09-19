@@ -1,4 +1,5 @@
-import { NumberBusiness } from '@api/dto/chat.dto';
+import { type ForwardMessagesDto, NumberBusiness } from '@api/dto/chat.dto';
+import type { InstanceDto } from '@api/dto/instance.dto';
 import {
   ContactMessage,
   MediaMessage,
@@ -1160,6 +1161,10 @@ export class BusinessStartupService extends ChannelStartupService {
     }
   }
 
+  public async forwardMessages({ instanceName }: InstanceDto, data: ForwardMessagesDto) {
+    throw new BadRequestException('Not implemented');
+  }
+
   // Send Message Controller
   public async textMessage(data: SendTextDto, isIntegration = false) {
     const res = await this.sendMessageWithTyping(
@@ -1642,6 +1647,9 @@ export class BusinessStartupService extends ChannelStartupService {
     throw new BadRequestException('Method not available on WhatsApp Business API');
   }
   public async markMessageAsRead() {
+    throw new BadRequestException('Method not available on WhatsApp Business API');
+  }
+  public async markChatAsRead() {
     throw new BadRequestException('Method not available on WhatsApp Business API');
   }
   public async archiveChat() {

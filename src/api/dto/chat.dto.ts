@@ -61,13 +61,21 @@ export class ProfilePictureDto {
   picture?: string;
 }
 
-class Key {
+export class Key {
   id: string;
   fromMe: boolean;
   remoteJid: string;
 }
 export class ReadMessageDto {
   readMessages: Key[];
+}
+export class ReadChatDto {
+  remoteJid: string;
+}
+
+export class ForwardMessagesDto {
+  keys: Key[];
+  numbers: string[];
 }
 
 export class LastMessage {
@@ -100,6 +108,10 @@ export class DeleteMessage {
   fromMe: boolean;
   remoteJid: string;
   participant?: string;
+}
+
+export class DeleteMultipleMessages {
+  messages: DeleteMessage[];
 }
 export class Options {
   delay?: number;

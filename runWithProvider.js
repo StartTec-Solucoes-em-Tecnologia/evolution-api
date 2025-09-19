@@ -4,6 +4,9 @@ const { existsSync } = require('fs');
 
 dotenv.config();
 
+// Use pnpm instead of npm/npx
+const packageManager = 'pnpm';
+
 const { DATABASE_PROVIDER } = process.env;
 const databaseProviderDefault = DATABASE_PROVIDER ?? 'postgresql';
 

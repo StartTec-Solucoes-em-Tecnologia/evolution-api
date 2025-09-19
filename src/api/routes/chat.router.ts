@@ -3,6 +3,7 @@ import {
   ArchiveChatDto,
   BlockUserDto,
   DeleteMessage,
+  DeleteMultipleMessages,
   getBase64FromMediaMessageDto,
   MarkChatUnreadDto,
   NumberDto,
@@ -10,6 +11,7 @@ import {
   ProfileNameDto,
   ProfilePictureDto,
   ProfileStatusDto,
+  ReadChatDto,
   ReadMessageDto,
   SendPresenceDto,
   UpdateMessageDto,
@@ -24,6 +26,7 @@ import {
   blockUserSchema,
   contactValidateSchema,
   deleteMessageSchema,
+  deleteMultipleMessagesSchema,
   markChatUnreadSchema,
   messageUpSchema,
   messageValidateSchema,
@@ -33,6 +36,7 @@ import {
   profilePictureSchema,
   profileSchema,
   profileStatusSchema,
+  readChatSchema,
   readMessageSchema,
   updateMessageSchema,
   whatsappNumberSchema,
@@ -70,6 +74,16 @@ export class ChatRouter extends RouterBroker {
 
         return res.status(HttpStatus.CREATED).json(response);
       })
+      .post(this.routerPath('markChatAsRead'), ...guards, async (req, res) => {
+        const response = await this.dataValidate<ReadChatDto>({
+          request: req,
+          schema: readChatSchema,
+          ClassRef: ReadChatDto,
+          execute: (instance, data) => chatController.readChat(instance, data),
+        });
+
+        return res.status(HttpStatus.CREATED).json(response);
+      })
       .post(this.routerPath('archiveChat'), ...guards, async (req, res) => {
         const response = await this.dataValidate<ArchiveChatDto>({
           request: req,
@@ -99,6 +113,16 @@ export class ChatRouter extends RouterBroker {
         });
 
         return res.status(HttpStatus.CREATED).json(response);
+      })
+      .post(this.routerPath('deleteMultipleMessages'), ...guards, async (req, res) => {
+        const response = await this.dataValidate<DeleteMultipleMessages>({
+          request: req,
+          schema: deleteMultipleMessagesSchema,
+          ClassRef: DeleteMultipleMessages,
+          execute: (instance, data) => chatController.deleteMultipleMessages(instance, data),
+        });
+
+        return res.status(HttpStatus.OK).json(response);
       })
       .post(this.routerPath('fetchProfilePictureUrl'), ...guards, async (req, res) => {
         const response = await this.dataValidate<NumberDto>({
