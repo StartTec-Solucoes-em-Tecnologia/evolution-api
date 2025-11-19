@@ -17,6 +17,7 @@ import { Events, wa } from '@api/types/wa.types';
 import { AudioConverter, Chatwoot, ConfigService, Openai, S3 } from '@config/env.config';
 import { BadRequestException, InternalServerErrorException } from '@exceptions';
 import { createJid } from '@utils/createJid';
+import { sendTelemetry } from '@utils/sendTelemetry';
 import axios from 'axios';
 import { isBase64, isURL } from 'class-validator';
 import EventEmitter2 from 'eventemitter2';
@@ -172,6 +173,8 @@ export class EvolutionStartupService extends ChannelStartupService {
 
         this.logger.log(messageRaw);
 
+        sendTelemetry(`received.message.${messageRaw.messageType ?? 'unknown'}`);
+
         this.sendDataWebhook(Events.MESSAGES_UPSERT, messageRaw);
 
         await chatbotController.emit({
@@ -324,8 +327,8 @@ export class EvolutionStartupService extends ChannelStartupService {
         messageRaw = {
           key: { fromMe: true, id: messageId, remoteJid: number },
           message: {
-            base64: isBase64(message.media) ? message.media : undefined,
-            mediaUrl: isURL(message.media) ? message.media : undefined,
+            base64: isBase64(message.media) ? message.media : null,
+            mediaUrl: isURL(message.media) ? message.media : null,
             quoted,
           },
           messageType: 'imageMessage',
@@ -338,8 +341,8 @@ export class EvolutionStartupService extends ChannelStartupService {
         messageRaw = {
           key: { fromMe: true, id: messageId, remoteJid: number },
           message: {
-            base64: isBase64(message.media) ? message.media : undefined,
-            mediaUrl: isURL(message.media) ? message.media : undefined,
+            base64: isBase64(message.media) ? message.media : null,
+            mediaUrl: isURL(message.media) ? message.media : null,
             quoted,
           },
           messageType: 'videoMessage',
@@ -352,8 +355,8 @@ export class EvolutionStartupService extends ChannelStartupService {
         messageRaw = {
           key: { fromMe: true, id: messageId, remoteJid: number },
           message: {
-            base64: isBase64(message.media) ? message.media : undefined,
-            mediaUrl: isURL(message.media) ? message.media : undefined,
+            base64: isBase64(message.media) ? message.media : null,
+            mediaUrl: isURL(message.media) ? message.media : null,
             quoted,
           },
           messageType: 'audioMessage',
@@ -373,8 +376,8 @@ export class EvolutionStartupService extends ChannelStartupService {
         messageRaw = {
           key: { fromMe: true, id: messageId, remoteJid: number },
           message: {
-            base64: isBase64(message.media) ? message.media : undefined,
-            mediaUrl: isURL(message.media) ? message.media : undefined,
+            base64: isBase64(message.media) ? message.media : null,
+            mediaUrl: isURL(message.media) ? message.media : null,
             quoted,
           },
           messageType: 'documentMessage',
@@ -450,7 +453,7 @@ export class EvolutionStartupService extends ChannelStartupService {
         }
       }
 
-      const base64 = messageRaw.message.base64;
+      const { base64 } = messageRaw.message;
       delete messageRaw.message.base64;
 
       if (base64 || file || audioFile) {
@@ -532,7 +535,8 @@ export class EvolutionStartupService extends ChannelStartupService {
       throw new BadRequestException(error.toString());
     }
   }
-  public async forwardMessages({ instanceName }: InstanceDto, data: ForwardMessagesDto) {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  public async forwardMessages(_instance: InstanceDto, _data: ForwardMessagesDto) {
     throw new BadRequestException('Not implemented');
   }
 
