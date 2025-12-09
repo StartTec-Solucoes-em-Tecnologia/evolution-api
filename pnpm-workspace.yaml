@@ -1,9 +1,19 @@
 packages:
-  - '.'
+  - .
 
 ignoredBuiltDependencies:
   - baileys
 
-# pnpm workspace configuration
-prefer-workspace-packages: true
 link-workspace-packages: true
+
+onlyBuiltDependencies:
+  - '@ffmpeg-installer/darwin-arm64'
+  - '@prisma/client'
+  - '@prisma/engines'
+  - '@scarf/scarf'
+  - esbuild
+  - prisma
+  - protobufjs
+  - sharp
+
+prefer-workspace-packages: true
