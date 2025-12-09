@@ -113,6 +113,7 @@ export class WebsocketController extends EventController implements EventControl
     sender,
     apiKey,
     integration,
+    extra,
   }: EmitData): Promise<void> {
     if (integration && !integration.includes('websocket')) {
       return;
@@ -125,6 +126,7 @@ export class WebsocketController extends EventController implements EventControl
     const configEv = event.replace(/[.-]/gm, '_').toUpperCase();
     const logEnabled = configService.get<Log>('LOG').LEVEL.includes('WEBSOCKET');
     const message = {
+      ...(extra ?? {}),
       event,
       instance: instanceName,
       data,
