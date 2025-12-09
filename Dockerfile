@@ -35,7 +35,12 @@ RUN chmod +x ./Docker/scripts/* && dos2unix ./Docker/scripts/*
 
 RUN ./Docker/scripts/generate_database.sh
 
-RUN pnpm run build
+# Increase Node.js memory limit and optimize build for Docker
+ENV NODE_OPTIONS="--max-old-space-size=4096"
+ENV NODE_ENV=production
+
+# Build with memory optimizations (using docker-specific build script)
+RUN pnpm build:docker || pnpm build
 
 FROM node:24-alpine AS final
 
